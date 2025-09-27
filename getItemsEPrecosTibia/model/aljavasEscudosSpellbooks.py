@@ -1,6 +1,6 @@
 from curl_cffi import requests
 from bs4 import BeautifulSoup
-import utils.utils as u
+import utils.Utils as u
 
 SLOTS_ESCUDOS_SPELLBOOKS = ["Spellbooks", "Escudos"]
 WIKI_URL = "https://www.tibiawiki.com.br/wiki/{}"

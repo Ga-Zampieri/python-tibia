@@ -84,7 +84,7 @@ def addBuyableFunction(item_list):
             continue
         if (item.type is not None and item.type != item_type):
             item_type = item.type
-            itens_compraveis.append(f"------------------------------------SLOT: {item_type} ------------------------------------\n")
+            itens_compraveis.append(f"------------------------------------SLOT: {item_type}------------------------------------\n")
         itens_compraveis.append(f"shopModule:addBuyableItem({{'{item.name}'}}, {item.id}, {item.precoComprarDoNPC}, 0, '{item.name}')\n")
     return itens_compraveis
 
@@ -96,7 +96,7 @@ def addSellableFunction(item_list):
             continue
         if (item.type is not None and item.type != item_type):
             item_type = item.type
-            itens_vendiveis.append(f"------------------------------------SLOT: {item_type} ------------------------------------\n")
+            itens_vendiveis.append(f"------------------------------------SLOT: {item_type}------------------------------------\n")
         itens_vendiveis.append(f"shopModule:addSellableItem({{'{item.name}'}}, {item.id}, {item.precoVenderParaNPC})\n")
     return itens_vendiveis
 

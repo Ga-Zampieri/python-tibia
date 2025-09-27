@@ -1,6 +1,6 @@
 from curl_cffi import requests
 from bs4 import BeautifulSoup
-import utils.utils as u
+import utils.Utils as u
 
 SLOTS_WANDS_E_RODS = ["Wands", "Rods"]
 
