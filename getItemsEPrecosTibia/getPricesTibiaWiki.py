@@ -19,6 +19,8 @@ MELEE_TWO_HANDED = []
 OUTPUT_FILE = "getItemsEPrecosTibia\\assets\\output.txt"
 OUTPUT_ITENS_COMPRAVEIS = "getItemsEPrecosTibia\\assets\\output_compraveis.txt"
 OUTPUT_ITENS_VENDIVEIS = "getItemsEPrecosTibia\\assets\\output_vendiveis.txt"
+INPUT_ITENS_COMPRAVEIS_FIXOS = "getItemsEPrecosTibia\\assets\\_compraveis_fixos.txt"
+INPUT_ITENS_VENDIVEIS_FIXOS = "getItemsEPrecosTibia\\assets\\_vendiveis_fixos.txt"
 XML_FILE = "getItemsEPrecosTibia\\assets\\items.xml"
 
 def main():
@@ -53,12 +55,18 @@ def main():
         f.write(f"{len(ITEMS_COMPRAVEIS)} itens compráveis.\n")
         for item in ITEMS_COMPRAVEIS:
             f.write(item)
+        with open(INPUT_ITENS_COMPRAVEIS_FIXOS, "r", encoding="utf-8") as fcf:
+            for line in fcf.readlines():
+                f.write(line)
         print("Finalizada escrita de itens compráveis.")
 
     with open(OUTPUT_ITENS_VENDIVEIS, "w", encoding="utf-8") as f:
         f.write(f"{len(ITEMS_VENDIVEIS)} itens vendíveis.\n")
         for item in ITEMS_VENDIVEIS:
             f.write(item)
+        with open(INPUT_ITENS_VENDIVEIS_FIXOS, "r", encoding="utf-8") as fvf:
+            for line in fvf.readlines():
+                f.write(line)
         print("Finalizada escrita de itens vendíveis.")
     
 if __name__ == "__main__":
