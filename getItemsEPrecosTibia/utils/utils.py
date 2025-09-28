@@ -78,25 +78,35 @@ def get_buy_price(soup):
 
 def addBuyableFunction(item_list):
     itens_compraveis = []
+    item_list = sorted(item_list, key=lambda item: (item.type, item.maos, item.name))
     item_type = None
+    item_maos = None
     for item in item_list:
         if item.precoComprarDoNPC is None:
             continue
         if (item.type is not None and item.type != item_type):
             item_type = item.type
             itens_compraveis.append(f"------------------------------------SLOT: {item_type}------------------------------------\n")
+        if (item.maos is not None and item.maos != item_maos):
+            item_maos = item.maos
+            itens_compraveis.append(f"------------------------------------Mãos: {item_maos}------------------------------------\n")
         itens_compraveis.append(f"shopModule:addBuyableItem({{'{item.name}'}}, {item.id}, {item.precoComprarDoNPC}, 0, '{item.name}')\n")
     return itens_compraveis
 
 def addSellableFunction(item_list):
     itens_vendiveis = []
+    item_list = sorted(item_list, key=lambda item: (item.type, item.maos, item.name))
     item_type = None
+    item_maos = None
     for item in item_list:
         if item.precoVenderParaNPC is None:
             continue
         if (item.type is not None and item.type != item_type):
             item_type = item.type
             itens_vendiveis.append(f"------------------------------------SLOT: {item_type}------------------------------------\n")
+        if (item.maos is not None and item.maos != item_maos):
+            item_maos = item.maos
+            itens_vendiveis.append(f"------------------------------------Mãos: {item_maos}------------------------------------\n")
         itens_vendiveis.append(f"shopModule:addSellableItem({{'{item.name}'}}, {item.id}, {item.precoVenderParaNPC})\n")
     return itens_vendiveis
 

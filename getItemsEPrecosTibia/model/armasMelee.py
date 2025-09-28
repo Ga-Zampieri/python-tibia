@@ -100,5 +100,5 @@ def getInfosFromItensWiki(ITEMS_WIKI):
                     precoComprarDoNPC,
                     precoVenderParaNPC,
                 )
-            ITEMS_WIKI.append(item)
+            ITEMS_WIKI.append(item) 
             print(item.__str__())

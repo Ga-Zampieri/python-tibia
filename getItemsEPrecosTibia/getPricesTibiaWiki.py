@@ -14,16 +14,18 @@ import model.ExtraSlot as ex
 ITEMS_WIKI = []
 ITEMS_VENDIVEIS = []
 ITEMS_COMPRAVEIS = []
-OUTPUT_FILE = "C:\\Git\\python\\python-tibia\\getItemsEPrecosTibia\\assets\\output.txt"
-OUTPUT_ITENS_COMPRAVEIS = "C:\\Git\\python\\python-tibia\\getItemsEPrecosTibia\\assets\\output_compraveis.txt"
-OUTPUT_ITENS_VENDIVEIS = "C:\\Git\\python\\python-tibia\\getItemsEPrecosTibia\\assets\\output_vendiveis.txt"
-XML_FILE = "C:\\Git\\python\\python-tibia\\getItemsEPrecosTibia\\assets\\items.xml"
+MELEE_ONE_HANDED = []
+MELEE_TWO_HANDED = []
+OUTPUT_FILE = "getItemsEPrecosTibia\\assets\\output.txt"
+OUTPUT_ITENS_COMPRAVEIS = "getItemsEPrecosTibia\\assets\\output_compraveis.txt"
+OUTPUT_ITENS_VENDIVEIS = "getItemsEPrecosTibia\\assets\\output_vendiveis.txt"
+XML_FILE = "getItemsEPrecosTibia\\assets\\items.xml"
 
 def main():
 
     # ex.getInfosFromItensWiki(ITEMS_WIKI)
-    it.getInfosFromItensWiki(ITEMS_WIKI)
     am.getInfosFromItensWiki(ITEMS_WIKI)
+    it.getInfosFromItensWiki(ITEMS_WIKI)
     ar.getInfosFromItensWiki(ITEMS_WIKI)
     mu.getInfosFromItensWiki(ITEMS_WIKI)
     al.getInfosFromItensWiki(ITEMS_WIKI)
@@ -38,7 +40,7 @@ def main():
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         item_type = None
-        f.write(f"{ITEMS_WIKI.count} itens.")
+        f.write(f"{len(ITEMS_WIKI)} itens.\n")
         for item in ITEMS_WIKI:
             if (item_type is None) or item_type != item.type:
                 item_type = item.type
@@ -48,13 +50,13 @@ def main():
 
 
     with open(OUTPUT_ITENS_COMPRAVEIS, "w", encoding="utf-8") as f:
-        f.write(f"{ITEMS_COMPRAVEIS.count} itens compráveis.")
+        f.write(f"{len(ITEMS_COMPRAVEIS)} itens compráveis.\n")
         for item in ITEMS_COMPRAVEIS:
             f.write(item)
         print("Finalizada escrita de itens compráveis.")
 
     with open(OUTPUT_ITENS_VENDIVEIS, "w", encoding="utf-8") as f:
-        f.write(f"{ITEMS_COMPRAVEIS.count} itens vendíveis.")
+        f.write(f"{len(ITEMS_VENDIVEIS)} itens vendíveis.\n")
         for item in ITEMS_VENDIVEIS:
             f.write(item)
         print("Finalizada escrita de itens vendíveis.")
