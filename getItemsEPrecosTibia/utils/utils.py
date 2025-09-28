@@ -95,6 +95,8 @@ def addBuyableFunction(item_list):
             if (item.maos is not None and item.maos != item_maos):
                 item_maos = item.maos
                 itens_compraveis.append(f"------------------------------------Mãos: {item_maos}------------------------------------\n")
+        if (item.id is None):
+            itens_compraveis.append(f"--shopModule:addSellableItem({{'{item.name}'}}, {item.id}, {item.precoVenderParaNPC})\n")
         itens_compraveis.append(f"shopModule:addBuyableItem({{'{item.name}'}}, {item.id}, {item.precoComprarDoNPC}, 0, '{item.name}')\n")
     return itens_compraveis
 
@@ -117,6 +119,8 @@ def addSellableFunction(item_list):
             if (item.maos is not None and item.maos != item_maos):
                 item_maos = item.maos
                 itens_vendiveis.append(f"------------------------------------Mãos: {item_maos}------------------------------------\n")
+        if (item.id is None):
+            itens_vendiveis.append(f"--shopModule:addSellableItem({{'{item.name}'}}, {item.id}, {item.precoVenderParaNPC})\n")
         itens_vendiveis.append(f"shopModule:addSellableItem({{'{item.name}'}}, {item.id}, {item.precoVenderParaNPC})\n")
     return itens_vendiveis
 
