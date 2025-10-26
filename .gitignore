@@ -207,6 +207,9 @@ marimo/_lsp/
 __marimo__/
 
 # Outputs
-assets/
+assets/items.xml
+assets/output.txt
+assets/output_vendiveis.txt
+assets/output_compraveis.txt
 
 .venv/
