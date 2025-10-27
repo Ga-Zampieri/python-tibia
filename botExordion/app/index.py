@@ -38,27 +38,59 @@ def search_runa():
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         ret = Runa.getRuna(key_name=key.get())
+        key_entry.delete(0, tk.END)
     out = buf.getvalue()
     
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
-    if ret:
-        rune_select_btn.configure(background="lightgreen")
-    else:
-        rune_select_btn.configure(background="lightcoral")
+
+def load_runa():   
+    returnBox.delete("1.0", tk.END)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ret = Runa.load_mappings()
+    out = buf.getvalue()
+    
+    if not out:
+        out = "Nenhum resultado registrado.\n"
+    returnBox.insert("1.0", out)
+        
+def save_runa():   
+    returnBox.delete("1.0", tk.END)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ret = Runa.save_mappings()
+    out = buf.getvalue()
+    
+    if not out:
+        out = "Nenhum resultado registrado.\n"
+    returnBox.insert("1.0", out)
+        
+def list_runa():   
+    returnBox.delete("1.0", tk.END)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ret = Runa.list_mappings()
+    out = buf.getvalue()
+    
+    if not out:
+        out = "Nenhum resultado registrado.\n"
+    returnBox.insert("1.0", out)
 
 def reset_runa():    
     returnBox.delete("1.0", tk.END)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        Runa.resetRuna()
+        Runa.resetRuna(key_name=key.get())
+        key_entry.delete(0, tk.END)
     out = buf.getvalue()
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
-    rune_select_btn.configure(background="SystemButtonFace")
-    rune_select_btn.configure(background="SystemButtonFace")
 
 def start_macro_rune():
     Runa.Atacar(True)
@@ -98,44 +130,41 @@ def reset_coordinates():
         out = "Nenhum resultado registrado.\n"
 
     returnBox.insert("1.0", out)
-    busca_water_btn.configure(background="SystemButtonFace")
-    busca_varinha_btn.configure(background="SystemButtonFace")
-
 
 def search_varinha():   
     returnBox.delete("1.0", tk.END)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        ret = Pesca.getFishingRod()
+        Pesca.getFishingRod()
     out = buf.getvalue()
     
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
-    if ret:
-        busca_varinha_btn.configure(background="lightgreen")
-    else:
-        busca_varinha_btn.configure(background="lightcoral")
 
 def search_aguas():   
     returnBox.delete("1.0", tk.END)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        ret = Pesca.getWaters()
+        Pesca.getWaters()
     out = buf.getvalue()
     
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
-    if ret:
-        busca_water_btn.configure(background="lightgreen")
-    else:
-        busca_water_btn.configure(background="lightcoral")
 
 def start_pesca():
     # inicia a pesca (Pesca.Pescar cria a sua própria thread interna)
+    if Pesca.varinhaX is None or Pesca.varinhaY is None:
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", "Necessário definir a varinha de pesca antes de iniciar.\n")
+        return
+    if not Pesca.watersCoords:
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", "Necessário definir ao menos uma água antes de iniciar.\n")
+        return
     Pesca.Pescar(True)
     start_btn.config(state=tk.DISABLED)
     stop_btn.config(state=tk.NORMAL)
@@ -178,32 +207,41 @@ def stop_pesca():
 returnBox = tk.Text(mainframe, width=40, height=10)
 returnBox.grid(column=1, row=4, columnspan=5, sticky=(W, E))
 
+label_key = tk.Label(mainframe, text="Hotkey:")
+label_key.grid(column=1, row=1, sticky=(W, E))
 key = StringVar()
 key_entry = tk.Entry(mainframe, width=1, textvariable=key)
-key_entry.grid(column=1, row=6, sticky=(W, E))
-
+key_entry.grid(column=2, row=1, sticky=(W, E))
+rune_select_btn = tk.Button(mainframe, text="Get Rune", command=search_runa)
+rune_select_btn.grid(column=3, row=1, sticky=(W, E))
+list_runas_btn = tk.Button(mainframe, text="List Preset", command=list_runa)
+list_runas_btn.grid(column=4, row=1, sticky=(W, E))
 sobrepor_btn = tk.Button(mainframe, text="Sobrepor Tela", command=sobrepor_todas_janelas)
-sobrepor_btn.grid(column=1, row=1, sticky=(W, E))
+sobrepor_btn.grid(column=5, row=1, sticky=(W, E))
 sobrepor_btn.configure(background="lightcoral")
-rune_select_btn = tk.Button(mainframe, text="Buscar Runa", command=search_runa)
-rune_select_btn.grid(column=2, row=1, sticky=(W, E))
-macro_rune_start_btn = tk.Button(mainframe, text="Macro Runa Start", command=start_macro_rune)
-macro_rune_start_btn.grid(column=3, row=1, sticky=(W, E))
-macro_rune_stop_btn = tk.Button(mainframe, text="Macro Runa Stop", command=stop_macro_rune, state=tk.DISABLED)
-macro_rune_stop_btn.grid(column=4, row=1, sticky=(W, E))
-reset_runas_btn = tk.Button(mainframe, text="Reset Runas", command=reset_runa)
-reset_runas_btn.grid(column=5, row=1, sticky=(W, E))
 
-busca_varinha_btn = tk.Button(mainframe, text="Buscar Varinha", command=search_varinha)
-busca_varinha_btn.grid(column=1, row=2, sticky=(W, E))
-busca_water_btn = tk.Button(mainframe, text="Buscar Águas", command=search_aguas)
-busca_water_btn.grid(column=2, row=2, sticky=(W, E))
-start_btn = tk.Button(mainframe, text="Iniciar Pesca", command=start_pesca)
-start_btn.grid(column=3, row=2, sticky=(W, E))
-stop_btn = tk.Button(mainframe, text="Parar Pesca", command=stop_pesca, state=tk.DISABLED)
-stop_btn.grid(column=4, row=2, sticky=(W, E))
-reset_coordinates_btn = tk.Button(mainframe, text="Reset Pesca", command=reset_coordinates)
-reset_coordinates_btn.grid(column=5, row=2, sticky=(W, E))
+save_runas_btn = tk.Button(mainframe, text="Save Preset", command=save_runa)
+save_runas_btn.grid(column=1, row=2, sticky=(W, E))
+load_runas_btn = tk.Button(mainframe, text="Load Preset", command=load_runa)
+load_runas_btn.grid(column=2, row=2, sticky=(W, E))
+macro_rune_start_btn = tk.Button(mainframe, text="Start Macro", command=start_macro_rune)
+macro_rune_start_btn.grid(column=3, row=2, sticky=(W, E))
+macro_rune_stop_btn = tk.Button(mainframe, text="Stop Macro", command=stop_macro_rune, state=tk.DISABLED)
+macro_rune_stop_btn.grid(column=4, row=2, sticky=(W, E))
+reset_runas_btn = tk.Button(mainframe, text="Reset Runes", command=reset_runa)
+reset_runas_btn.grid(column=5, row=2, sticky=(W, E))
+
+busca_varinha_btn = tk.Button(mainframe, text="Get FishingRod", command=search_varinha)
+busca_varinha_btn.grid(column=1, row=3, sticky=(W, E))
+busca_water_btn = tk.Button(mainframe, text="Get Water", command=search_aguas)
+busca_water_btn.grid(column=2, row=3, sticky=(W, E))
+start_btn = tk.Button(mainframe, text="Start Fishing", command=start_pesca)
+start_btn.grid(column=3, row=3, sticky=(W, E))
+stop_btn = tk.Button(mainframe, text="Stop Fishing", command=stop_pesca, state=tk.DISABLED)
+stop_btn.grid(column=4, row=3, sticky=(W, E))
+reset_coordinates_btn = tk.Button(mainframe, text="Reset Fishing", command=reset_coordinates)
+reset_coordinates_btn.grid(column=5, row=3, sticky=(W, E))
+
 
 root.columnconfigure(0, weight=1)
 root.rowconfigure(0, weight=1)	

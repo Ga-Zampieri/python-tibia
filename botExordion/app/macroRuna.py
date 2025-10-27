@@ -10,8 +10,6 @@ class Runa:
     _thread = None
     _stop_event = threading.Event()
     _kb_listener = None
-    runaX = None
-    runaY = None
     # mapa: nome_da_tecla -> (x, y)
     _mappings = {}
     _mappings_file = os.path.join(os.path.dirname(__file__), "runa_mappings.json")
@@ -47,25 +45,13 @@ class Runa:
 
     @classmethod
     def equipRuna(cls, key_name: str = None):
-        """Move o mouse e clica na runa mapeada pela tecla (ou usa runaX/runaY padrão).
-
-        Se key_name for fornecido, busca as coordenadas em _mappings.
-        """
+        """Se key_name for fornecido, busca as coordenadas em _mappings."""
         if key_name:
             coords = cls._mappings.get(key_name)
             if not coords:
                 print(f"Nenhuma runa mapeada para a tecla '{key_name}'.")
                 return
             targetX, targetY = coords
-        else:
-            if cls.runaX is None or cls.runaY is None:
-                print("Coordenadas da runa não definidas. Aguarde e clique na runa para registrar...")
-                ok = cls.getRuna()
-                if not ok or cls.runaX is None or cls.runaY is None:
-                    print("Falha ao obter coordenadas da runa. Operação cancelada.")
-                    return
-            targetX, targetY = cls.runaX, cls.runaY
-
         try:
             currentX, currentY = pgui.position().x, pgui.position().y
             pgui.moveTo(targetX, targetY)
@@ -113,12 +99,11 @@ class Runa:
             listener.stop()
             if 'x' in coords:
                 if key_name:
-                    cls._mappings[key_name] = (coords['x'], coords['y'])
-                    print(f"Runa mapeada: tecla '{key_name}' -> X {coords['x']}, Y {coords['y']}")
+                    cls.map_key_to_coords(key_name, coords['x'], coords['y'])
+                    return True
                 else:
-                    cls.runaX, cls.runaY = coords['x'], coords['y']
-                    print(f"Runa padrão encontrada em: X {cls.runaX}, Y {cls.runaY}")
-                return True
+                    print("Necessário informar uma hotkey para bindar a runa capturada.")
+                    return False
             else:
                 print("Nenhuma coordenada registrada (timeout).")
                 return False
@@ -148,15 +133,14 @@ class Runa:
         print("Mapeamentos atuais:")
         for k, v in cls._mappings.items():
             print(f"  '{k}' -> X {v[0]}, Y {v[1]}")
+        return True
 
     @classmethod
     def resetRuna(cls, key_name: str = None):
         if key_name:
             cls.remove_mapping(key_name)
         else:
-            cls.runaX = None
-            cls.runaY = None
-            print("Coordenadas de runa padrão foram resetadas.")
+            cls._mappings = {}
 
     @classmethod
     def save_mappings(cls):
@@ -164,6 +148,7 @@ class Runa:
             with open(cls._mappings_file, "w", encoding="utf-8") as f:
                 json.dump(cls._mappings, f, ensure_ascii=False, indent=2)
             print(f"Mapeamentos salvos em {cls._mappings_file}")
+            return True 
         except Exception as e:
             print(f"Erro ao salvar mapeamentos: {e}")
 
@@ -176,5 +161,6 @@ class Runa:
                     # garantir tuplas de ints
                     cls._mappings = {k: (int(v[0]), int(v[1])) for k, v in data.items()}
                 print(f"Mapeamentos carregados de {cls._mappings_file}")
+            return True
         except Exception as e:
             print(f"Erro ao carregar mapeamentos: {e}")
