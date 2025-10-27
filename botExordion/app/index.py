@@ -1,7 +1,7 @@
 import contextlib
 import io
 import tkinter as tk
-from tkinter import N, S, W, E, ttk
+from tkinter import N, S, W, E, StringVar, ttk
 from .pescaAutomatica import Pesca
 from .macroRuna import Runa
 import threading
@@ -37,7 +37,7 @@ def search_runa():
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        ret = Runa.getRuna()
+        ret = Runa.getRuna(key_name=key.get())
     out = buf.getvalue()
     
     if not out:
@@ -178,14 +178,18 @@ def stop_pesca():
 returnBox = tk.Text(mainframe, width=40, height=10)
 returnBox.grid(column=1, row=4, columnspan=5, sticky=(W, E))
 
+key = StringVar()
+key_entry = tk.Entry(mainframe, width=1, textvariable=key)
+key_entry.grid(column=1, row=6, sticky=(W, E))
+
 sobrepor_btn = tk.Button(mainframe, text="Sobrepor Tela", command=sobrepor_todas_janelas)
 sobrepor_btn.grid(column=1, row=1, sticky=(W, E))
 sobrepor_btn.configure(background="lightcoral")
 rune_select_btn = tk.Button(mainframe, text="Buscar Runa", command=search_runa)
 rune_select_btn.grid(column=2, row=1, sticky=(W, E))
-macro_rune_start_btn = tk.Button(mainframe, text="Macro Rune Start", command=start_macro_rune)
+macro_rune_start_btn = tk.Button(mainframe, text="Macro Runa Start", command=start_macro_rune)
 macro_rune_start_btn.grid(column=3, row=1, sticky=(W, E))
-macro_rune_stop_btn = tk.Button(mainframe, text="Macro Rune Stop", command=stop_macro_rune, state=tk.DISABLED)
+macro_rune_stop_btn = tk.Button(mainframe, text="Macro Runa Stop", command=stop_macro_rune, state=tk.DISABLED)
 macro_rune_stop_btn.grid(column=4, row=1, sticky=(W, E))
 reset_runas_btn = tk.Button(mainframe, text="Reset Runas", command=reset_runa)
 reset_runas_btn.grid(column=5, row=1, sticky=(W, E))
