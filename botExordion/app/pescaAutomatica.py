@@ -69,24 +69,41 @@ class Pesca:
             pass
     
     @classmethod
-    def getWaters(cls):
-        def _on_click(x, y, pressed):
+    def getWaters(cls, count: int = 5, timeout: int = 20):
+        """Captura `count` cliques sequenciais (padrão 5) e adiciona a cls.watersCoords.
+        Se o timeout expirar antes de obter todos, adiciona o que foi capturado.
+        Chamadas subsequentes apenas acrescentam à lista existente.
+        """
+        collected = []
+
+        def _on_click(x, y, button, pressed):
             if pressed:
-                coords['x'], coords['y'] = int(x), int(y)
-                return False  # stop listener
+                collected.append((int(x), int(y)))
+                print(f"Capturado {len(collected)}/{count}: {collected[-1]}")
+                if len(collected) >= count:
+                    return False  # para o listener quando atingir o número desejado
+
         try:
-            print("Buscando Águas")
-            coords = {}
-            timeout = 10  # segundos
-            
+            print(f"Buscando {count} águas (clique {count} vezes)...")
             listener = mouse.Listener(on_click=_on_click)
             listener.start()
-            listener.join(timeout)  # aguarda até o clique ou timeout
-            listener.stop()    
-            if 'x' in coords:
-                coords = coords['x'], coords['y']
-                cls.watersCoords.append(coords)
-            print(f"Águas encontradas em: {cls.watersCoords}")
+
+            end_time = time.time() + timeout
+            # aguarda até coletar count cliques ou até timeout
+            while time.time() < end_time and len(collected) < count:
+                time.sleep(0.1)
+
+            # garantir parada do listener
+            try:
+                listener.stop()
+            except Exception:
+                pass
+
+            if collected:
+                cls.watersCoords.extend(collected)
+                print(f"Águas totais: {cls.watersCoords}")
+            else:
+                print("Nenhuma coordenada registrada (timeout).")
             return True
         except Exception as e:
             print(f"Erro ao localizar águas: {e}")

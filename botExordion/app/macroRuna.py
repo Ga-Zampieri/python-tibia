@@ -1,9 +1,10 @@
-import random
 import pyautogui as pgui
 from pynput import mouse, keyboard
 import threading
-import time
 import json
+import time
+import platform
+import ctypes
 import os
 
 class Runa:
@@ -43,22 +44,54 @@ class Runa:
         except Exception:
             pass
 
+    @staticmethod
+    def _block_input():
+        """Bloqueia input humano (Windows). Retorna True se bloqueou."""
+        if platform.system() != "Windows":
+            return False
+        try:
+            ctypes.windll.user32.BlockInput(True)
+            return True
+        except Exception as e:
+            print(f"Não foi possível bloquear input: {e}")
+            return False
+
+    @staticmethod
+    def _unblock_input():
+        """Desbloqueia input humano (Windows)."""
+        if platform.system() != "Windows":
+            return
+        try:
+            ctypes.windll.user32.BlockInput(False)
+        except Exception:
+            pass
+
     @classmethod
-    def equipRuna(cls, key_name: str = None):
-        """Se key_name for fornecido, busca as coordenadas em _mappings."""
+    def equipRuna(cls, key_name: str = None, block: bool = True):
+        """Se key_name for fornecido, busca as coordenadas em _mappings.
+        Se block=True (padrão) bloqueia o input humano durante a ação (apenas Windows).
+        """
         if key_name:
             coords = cls._mappings.get(key_name)
             if not coords:
                 print(f"Nenhuma runa mapeada para a tecla '{key_name}'.")
                 return
             targetX, targetY = coords
+        blocked = False
         try:
+            if block:
+                blocked = cls._block_input()
+                if blocked:
+                    time.sleep(0.02)  # curto atraso para garantir bloqueio
             currentX, currentY = pgui.position().x, pgui.position().y
             pgui.moveTo(targetX, targetY)
             pgui.click(button='right')
             pgui.moveTo(currentX, currentY)
         except Exception as e:
             print(f"Erro durante o clique na runa: {e}")
+        finally:
+            if blocked:
+                cls._unblock_input()
 
     @classmethod
     def Atacar(cls, status: bool):
