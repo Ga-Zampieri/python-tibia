@@ -1,11 +1,12 @@
-import pyautogui as pgui
 from pynput import mouse, keyboard
 import threading
-import json
 import time
-import platform
-import ctypes
 import os
+import json
+import ctypes
+import platform
+import time
+from ctypes import wintypes
 
 class Runa:
     _thread = None
@@ -14,6 +15,16 @@ class Runa:
     # mapa: nome_da_tecla -> (x, y)
     _mappings = {}
     _mappings_file = os.path.join(os.path.dirname(__file__), "runa_mappings.json")
+
+    @staticmethod
+    def _set_cursor_pos(x: int, y: int) -> bool:
+        """Move o cursor diretamente via Windows API."""
+        if platform.system() != "Windows":
+            return False
+        try:
+            return ctypes.windll.user32.SetCursorPos(x, y)
+        except:
+            return False
 
     # ...existing code...
     @classmethod
@@ -44,51 +55,36 @@ class Runa:
         except Exception:
             pass
 
-    @staticmethod
-    def _block_input():
-        """Bloqueia input humano (Windows). Retorna True se bloqueou."""
-        if platform.system() != "Windows":
-            return False
-        try:
-            ctypes.windll.user32.BlockInput(True)
-            return True
-        except Exception as e:
-            print(f"Não foi possível bloquear input: {e}")
-            return False
-
-    @staticmethod
-    def _unblock_input():
-        """Desbloqueia input humano (Windows)."""
-        if platform.system() != "Windows":
-            return
-        try:
-            ctypes.windll.user32.BlockInput(False)
-        except Exception:
-            pass
-
-    @classmethod
-    def equipRuna(cls, key_name: str = None, block: bool = True):
-        """Se key_name for fornecido, busca as coordenadas em _mappings.
-        Se block=True (padrão) bloqueia o input humano durante a ação (apenas Windows).
-        """
+    @classmethod 
+    def equipRuna(cls, key_name: str = None):
+        """Equipa runa usando APIs nativas do Windows para controle preciso."""
         if key_name:
             coords = cls._mappings.get(key_name)
             if not coords:
                 print(f"Nenhuma runa mapeada para a tecla '{key_name}'.")
                 return
             targetX, targetY = coords
+
         blocked = False
         try:
-            if block:
-                blocked = cls._block_input()
-                if blocked:
-                    time.sleep(0.02)  # curto atraso para garantir bloqueio
-            currentX, currentY = pgui.position().x, pgui.position().y
-            pgui.moveTo(targetX, targetY)
-            pgui.click(button='right')
-            pgui.moveTo(currentX, currentY)
+            # Captura posição inicial
+            cursor = wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
+            startX, startY = cursor.x, cursor.y
+
+            # Usa SetCursorPos para movimento preciso
+            cls._set_cursor_pos(targetX, targetY)
+            time.sleep(0.01)  # breve pausa para garantir que o cursor se mova
+            # Clique direito via mouse_event
+            ctypes.windll.user32.mouse_event(0x0008, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTDOWN
+            ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)  # MOUSEEVENTF_RIGHTUP
+
+            time.sleep(0.01)  # breve pausa para garantir que o cursor se mova
+            # Retorna à posição original
+            cls._set_cursor_pos(startX, startY)
+
         except Exception as e:
-            print(f"Erro durante o clique na runa: {e}")
+            print(f"Erro durante equipagem da runa: {e}")
         finally:
             if blocked:
                 cls._unblock_input()
