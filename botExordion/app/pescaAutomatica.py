@@ -122,7 +122,7 @@ class Pesca:
         try:   
             while not cls._stop_event.is_set():
                 for _ in cls.watersCoords:
-                    for i in range(10):
+                    for i in range(3):  # tenta 3 vezes por água
                         if cls._stop_event.is_set():
                             return
                         randX = random.randint(-10, 10)
