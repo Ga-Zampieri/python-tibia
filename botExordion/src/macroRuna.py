@@ -14,7 +14,7 @@ class Runa:
     _kb_listener = None
     # mapa: nome_da_tecla -> (x, y)
     _mappings = {}
-    _mappings_file = os.path.join(os.path.dirname(__file__), "runa_mappings.json")
+    _mappings_file = os.path.join(os.path.dirname(__file__), "../assets/runa_mappings.json")
     # evita executar duas equipRuna simultâneas
     _action_lock = threading.Lock()
 

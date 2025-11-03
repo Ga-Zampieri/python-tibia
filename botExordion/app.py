@@ -2,8 +2,8 @@ import contextlib
 import io
 import tkinter as tk
 from tkinter import N, S, W, E, StringVar, ttk
-from .pescaAutomatica import Pesca
-from .macroRuna import Runa
+from .src.pescaAutomatica import Pesca
+from .src.macroRuna import Runa
 import threading
 
 root = tk.Tk()
