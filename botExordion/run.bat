@@ -21,7 +21,7 @@ if exist ".venv\Scripts\activate.bat" (
 )
 
 REM agora o cwd e' a raiz do projeto, executa o modulo como pacotes
-python -m botExordion.app.index
+python -m botExordion.app
 set EXITCODE=%ERRORLEVEL%
 
 REM mantem a janela aberta para ver possiveis erros
