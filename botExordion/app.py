@@ -3,16 +3,18 @@ import io
 import tkinter as tk
 import threading
 from tkinter import N, S, W, E, StringVar, ttk
+
+from .src.status import Status
 from .src.action_manager import ActionManager
 from .src.fishing import Pesca
 from .src.macro_rune import Runa
 
 class AppController:
-    def __init__(self, hwnd=None, actionManager=None, fishing=None, rune=None):
-        self._hwnd = hwnd
-        self._actionManager = actionManager
-        self._fishing = fishing
-        self._rune = rune
+    def __init__(self):
+        self._hwnd = None
+        self._actionManager = None
+        self._fishing = None
+        self._rune = None
     
 
 sobrepor_janela = False
@@ -61,7 +63,6 @@ def get_windows():
 
 
 def select_window():   
-    global windows
     selected = combo.get()
     
     if not selected:
@@ -70,15 +71,9 @@ def select_window():
         return
         
     try:
-        # Extract hwnd from the combobox string format "title (hwnd)"
         hwnd = int(selected.split('(')[-1].strip(')'))
-        
-        # Find the matching window from our stored list
-        window_info = next((w for w in windows if w[1] == hwnd), None)
-        
-        if window_info:
-            title, hwnd = window_info
-            # Update AppController and create ActionManager
+        title = selected.rsplit(' (', 1)[0]
+        if hwnd:
             appController._hwnd = hwnd
             appController._actionManager = ActionManager(hwnd)
             
@@ -100,11 +95,13 @@ def select_window():
         
         
 def search_runa():   
+    if not appController._rune:
+        appController._rune = Runa(appController._actionManager)
     returnBox.delete("1.0", tk.END)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        Runa.getRuna(key_name=key.get())
+        appController._rune.getRuna(key_name=key.get())
         key_entry.delete(0, tk.END)
     out = buf.getvalue()
     
@@ -113,11 +110,13 @@ def search_runa():
     returnBox.insert("1.0", out)
 
 def load_runa():   
+    if not appController._rune:
+        appController._rune = Runa(appController._actionManager)
     returnBox.delete("1.0", tk.END)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        ret = Runa.load_mappings()
+        appController._rune.load_mappings()
     out = buf.getvalue()
     
     if not out:
@@ -125,11 +124,13 @@ def load_runa():
     returnBox.insert("1.0", out)
         
 def save_runa():   
+    if not appController._rune:
+        appController._rune = Runa(appController._actionManager)
     returnBox.delete("1.0", tk.END)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        ret = Runa.save_mappings()
+        appController._rune.save_mappings()
     out = buf.getvalue()
     
     if not out:
@@ -137,22 +138,26 @@ def save_runa():
     returnBox.insert("1.0", out)
         
 def list_runa():   
+    if not appController._rune:
+        appController._rune = Runa(appController._actionManager)
     returnBox.delete("1.0", tk.END)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        ret = Runa.list_mappings()
+        appController._rune.list_mappings()
     out = buf.getvalue()
     
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
 
-def reset_runa():    
+def reset_runa():  
+    if not appController._rune:
+        appController._rune = Runa(appController._actionManager)  
     returnBox.delete("1.0", tk.END)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        Runa.resetRuna(key_name=key.get())
+        appController._rune.resetRuna(key_name=key.get())
         key_entry.delete(0, tk.END)
     out = buf.getvalue()
     if not out:
@@ -160,7 +165,9 @@ def reset_runa():
     returnBox.insert("1.0", out)
 
 def start_macro_rune():
-    Runa.Atacar(True)
+    if not appController._rune:
+        appController._rune = Runa(appController._actionManager)
+    appController._rune.Atacar(True)
     macro_rune_start_btn.config(state=tk.DISABLED)
     macro_rune_stop_btn.config(state=tk.NORMAL)
 
@@ -240,46 +247,58 @@ def start_pesca():
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Necessário definir ao menos uma água antes de iniciar.\n")
         return
-    appController._fishing.Pescar(True)
-    start_btn.config(state=tk.DISABLED)
-    stop_btn.config(state=tk.NORMAL)
-
-    # Monitora a thread interna do Pesca e reabilita botões quando terminar
-    def monitor(th):
-        if th:
-            th.join()  # espera o término da thread do bot
-        root.after(0, lambda: (start_btn.config(state=tk.NORMAL), stop_btn.config(state=tk.DISABLED)))
-
-    th = getattr(Pesca, "_thread", None)
-    if th:
-        threading.Thread(target=monitor, args=(th,), daemon=True).start()
+    if appController._fishing.status == Status.Inactive:
+        appController._fishing.Pescar()
+        start_btn.config(state=tk.DISABLED)
+        stop_btn.config(state=tk.NORMAL)
     else:
-        # fallback se não houver thread criada
         start_btn.config(state=tk.NORMAL)
         stop_btn.config(state=tk.DISABLED)
+
 
 def stop_pesca():
+    """Para a pesca usando o mesmo mecanismo que o ESC (set do _stop_event).
+    Garante que o listener de teclado e a thread sejam sinalizados e aguardados.
+    """
     if not appController._fishing:
-        appController._fishing = Pesca(appController._actionManager)
-    # sinaliza para o módulo de pesca parar; assume que Pesca.Pescar(False) apenas define uma flag
-    try:
-        appController._fishing.Pescar(False)
-    except Exception:
-        # se ocorrer erro ao sinalizar, habilita os botões de qualquer forma
-        start_btn.config(state=tk.NORMAL)
-        stop_btn.config(state=tk.DISABLED)
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", "Bot de pesca não está inicializado.\n")
         return
-    # opcional: aguarda o worker encerrar em background e atualiza os botões quando terminar
-    def waiter(th):
-        th.join(timeout=10)
-        root.after(0, lambda: (start_btn.config(state=tk.NORMAL), stop_btn.config(state=tk.DISABLED)))
-    with _worker_lock:
-        th = worker_thread
-    if th:
-        threading.Thread(target=waiter, args=(th,), daemon=True).start()
-    else:
+
+    f = appController._fishing
+    try:
+        try:
+            f._stop_event.set()
+        except Exception:
+            pass
+
+        try:
+            if getattr(f, "_kb_listener", None):
+                try:
+                    f._kb_listener.stop()
+                except Exception:
+                    pass
+                f._kb_listener = None
+        except Exception:
+            pass
+
+        th = getattr(f, "_thread", None)
+        if th and hasattr(th, "is_alive") and th.is_alive():
+            th.join(timeout=3)
+
+        try:
+            f.status = Status.Inactive
+        except Exception:
+            pass
+        # atualiza UI
         start_btn.config(state=tk.NORMAL)
         stop_btn.config(state=tk.DISABLED)
+
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", "Pesca parada.\n")
+    except Exception as e:
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", f"Erro ao parar pesca: {e}\n")
 
 
 root = tk.Tk()

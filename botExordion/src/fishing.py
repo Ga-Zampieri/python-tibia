@@ -3,6 +3,7 @@ import logging
 from pynput import mouse, keyboard
 import threading
 import time
+from .status import Status
 
 class Pesca:
     def __init__(self, action_manager):
@@ -12,6 +13,7 @@ class Pesca:
         self._kb_listener = None
         self.varinha = None
         self.watersCoords = []
+        self.status = Status.Inactive
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
@@ -23,9 +25,9 @@ class Pesca:
         except Exception as e:
             self.logger.error(f"Erro no handler de tecla: {e}")
 
-    def Pescar(self, status: bool):
+    def Pescar(self):
         try:
-            if status:
+            if self.status == Status.Inactive:
                 if self._thread and self._thread.is_alive():
                     self.logger.info("Bot já está rodando")
                     return
@@ -49,11 +51,13 @@ class Pesca:
                 self._thread = threading.Thread(target=self._run, daemon=True)
                 self._thread.start()
                 self.logger.info("Bot de pesca iniciado")
+                self.status = Status.Active
             else:
                 self.logger.info("Parando bot")
                 self._stop_event.set()
                 if self._kb_listener:
                     self._kb_listener.stop()
+                self.status = Status.Inactive
         except Exception as e:
             self.logger.error(f"Erro ao iniciar/parar bot: {e}")
 
@@ -114,12 +118,11 @@ class Pesca:
         try:
             self.logger.info("Iniciando ciclo de pesca...")
             while not self._stop_event.is_set():
-
+                
                 for i, water in enumerate(self.watersCoords):
                     if self._stop_event.is_set():
                         break
                     
-                    # Randomização mais ampla
                     randX = random.randint(-10, 10)
                     randY = random.randint(-10, 10)
                     varinha_pos = (self.varinha[0] + randX, self.varinha[1] + randY)
@@ -129,7 +132,6 @@ class Pesca:
                     if not self._action_manager.right_click(varinha_pos):
                         continue
                     time.sleep(0.5)
-                    # PESCAR
                     self._action_manager.move_mouse(water_pos)  # mover mouse para fora da tela
                     if not self._action_manager.left_click(water_pos):
                         continue
