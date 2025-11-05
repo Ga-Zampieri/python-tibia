@@ -2,7 +2,6 @@ from pynput import mouse, keyboard
 import threading
 import os
 import json
-import time
 from .status import Status
 
 

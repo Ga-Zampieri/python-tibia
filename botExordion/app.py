@@ -19,7 +19,6 @@ class AppController:
 
 sobrepor_janela = False
 worker_thread = None
-_worker_lock = threading.Lock()
 windows = []
 
 def sobrepor_todas_janelas():
@@ -172,10 +171,10 @@ def start_macro_rune():
     macro_rune_stop_btn.config(state=tk.NORMAL)
 
 def stop_macro_rune():  
-    # sinaliza para o módulo de runas parar; assume que MacroRune.MagicRune(False) apenas define uma flag
-    # from .macroRuneAutomatica import MacroRune
+    if not appController._rune:
+        appController._rune = Runa(appController._actionManager)  
     try:
-        Runa.Atacar(False)
+        appController._rune.Atacar(False)
     except Exception:
         # se ocorrer erro ao sinalizar, habilita os botões de qualquer forma
         macro_rune_start_btn.config(state=tk.NORMAL)
