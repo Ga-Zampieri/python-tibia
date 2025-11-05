@@ -85,7 +85,6 @@ class Runa:
             self._action_lock.release()
 
     def Atacar(self, status: bool):
-    def Atacar(self, status: bool):
         if status:
             if self._thread and self._thread.is_alive():
                 return
