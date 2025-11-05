@@ -1,4 +1,3 @@
-pyautogui
 pynput
 pillow
 pywin32
