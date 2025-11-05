@@ -55,7 +55,6 @@ class Runa:
             return False
 
         coords = self._mappings.get(key_name)
-        coords = self._mappings.get(key_name)
         if not coords:
             print(f"Nenhuma runa mapeada para a tecla '{key_name}'.")
             return False
@@ -178,7 +177,6 @@ class Runa:
             return
         print("Mapeamentos atuais:")
         for k, v in self._mappings.items():
-        for k, v in self._mappings.items():
             print(f"  '{k}' -> X {v[0]}, Y {v[1]}")
 
     def resetRuna(self, key_name: str = None):
@@ -200,8 +198,6 @@ class Runa:
 
     def load_mappings(self):
         try:
-            if os.path.exists(self._mappings_file):
-                with open(self._mappings_file, "r", encoding="utf-8") as f:
             if os.path.exists(self._mappings_file):
                 with open(self._mappings_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
