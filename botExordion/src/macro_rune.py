@@ -55,6 +55,7 @@ class Runa:
             return False
 
         coords = self._mappings.get(key_name)
+        coords = self._mappings.get(key_name)
         if not coords:
             print(f"Nenhuma runa mapeada para a tecla '{key_name}'.")
             return False
@@ -83,6 +84,7 @@ class Runa:
         finally:
             self._action_lock.release()
 
+    def Atacar(self, status: bool):
     def Atacar(self, status: bool):
         if status:
             if self._thread and self._thread.is_alive():
@@ -149,6 +151,7 @@ class Runa:
             if 'x' in coords:
                 if key_name:
                     self.map_key_to_coords(key_name, coords['x'], coords['y'])
+                    self.map_key_to_coords(key_name, coords['x'], coords['y'])
                     return True
                 else:
                     print("Necessário informar uma hotkey para bindar a runa capturada.")
@@ -176,12 +179,15 @@ class Runa:
             return
         print("Mapeamentos atuais:")
         for k, v in self._mappings.items():
+        for k, v in self._mappings.items():
             print(f"  '{k}' -> X {v[0]}, Y {v[1]}")
 
     def resetRuna(self, key_name: str = None):
         if key_name:
             self.remove_mapping(key_name)
+            self.remove_mapping(key_name)
         else:
+            self._mappings = {}
             self._mappings = {}
 
     def save_mappings(self):
@@ -195,6 +201,8 @@ class Runa:
 
     def load_mappings(self):
         try:
+            if os.path.exists(self._mappings_file):
+                with open(self._mappings_file, "r", encoding="utf-8") as f:
             if os.path.exists(self._mappings_file):
                 with open(self._mappings_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
