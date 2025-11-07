@@ -289,6 +289,7 @@ def stop_pesca():
             f.status = Status.Inactive
         except Exception:
             pass
+
         # atualiza UI
         start_btn.config(state=tk.NORMAL)
         stop_btn.config(state=tk.DISABLED)
@@ -298,7 +299,6 @@ def stop_pesca():
     except Exception as e:
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", f"Erro ao parar pesca: {e}\n")
-
 
 root = tk.Tk()
 root.title("Helper")

@@ -22,6 +22,8 @@ class Pesca:
             if key == keyboard.Key.esc:
                 self.logger.info("ESC pressionado — parando bot")
                 self._stop_event.set()
+                if self._kb_listener:
+                    self._kb_listener.stop()
         except Exception as e:
             self.logger.error(f"Erro no handler de tecla: {e}")
 
@@ -55,11 +57,14 @@ class Pesca:
             else:
                 self.logger.info("Parando bot")
                 self._stop_event.set()
+                if self.on_stop_callback:
+                    self.on_stop_callback()
                 if self._kb_listener:
                     self._kb_listener.stop()
                 self.status = Status.Inactive
         except Exception as e:
             self.logger.error(f"Erro ao iniciar/parar bot: {e}")
+
 
     def getFishingRod(self):
         def _on_click(x, y, button, pressed):
