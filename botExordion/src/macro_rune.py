@@ -2,53 +2,38 @@ from pynput import mouse, keyboard
 import threading
 import os
 import json
-from time import sleep, monotonic
+from time import sleep
 from .status import Status
 
 
 class Runa:
     def __init__(self, action_manager):
-        self._thread = None
         self._action_manager = action_manager
+        self._thread = None
         self._stop_event = threading.Event()
         self._kb_listener = None
         self._mappings = {}
         self._mappings_file = os.path.join(os.path.dirname(__file__), "../assets/runa_mappings.json")
-        self._action_lock = threading.Lock()
+        self._on_status_change = None
         self.status = Status.Inactive
 
-    @staticmethod
-    def _set_cursor_pos(x: int, y: int) -> bool:
-        try:
-            import ctypes
-            ctypes.windll.user32.SetCursorPos(x, y)
-            return True
-        except Exception:
-            return False
+    def set_status_callback(self, callback_function):
+        self._on_status_change = callback_function
+        print("Callback de status conectado à Pesca")
 
-    @staticmethod
-    def _get_cursor_pos():
-        try:
-            import ctypes
-            from ctypes import wintypes
-            pt = wintypes.POINT()
-            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-            return pt.x, pt.y
-        except Exception:
-            return None, None
+    def _update_status(self, new_status):
+        old_status = self.status
+        self.status = new_status
+        if old_status != new_status and self._on_status_change:
+            print(f"Pesca: Status mudou de {old_status} para {new_status}")
+            self._on_status_change(new_status)
 
-    @staticmethod
-    def _send_right_click():
-        try:
-            import ctypes
-            MOUSEEVENTF_RIGHTDOWN = 0x0008
-            MOUSEEVENTF_RIGHTUP = 0x0010
-            ctypes.windll.user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
-            sleep(0.02)
-            ctypes.windll.user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
-        except Exception as e:
-            print(f"Erro ao enviar clique direito: {e}")
-
+    def Atacar(self):
+        if self.status == Status.Inactive:
+            self._start()
+        else:
+            self._stop()
+            
     def equipRuna(self, key_name: str = None) -> bool:
         if not key_name:
             print("É necessário especificar a hotkey.")
@@ -60,52 +45,33 @@ class Runa:
             return False
         targetX, targetY = coords
 
-        if not self._action_lock.acquire(blocking=False):
-            print("Ação já em progresso. Ignorando novo pedido.")
-            return False
+        self._action_manager.right_click((targetX, targetY))
+        sleep(0.05)
+        return True
 
-        try:
-            startX, startY = self._get_cursor_pos()
-            if not self._set_cursor_pos(targetX, targetY):
-                print("Falha ao mover o cursor para a posição da runa.")
-                return False
+    def _start(self):
+        if self._thread and self._thread.is_alive():
+            return
 
-            self._send_right_click()
-            sleep(0.05)
+        if self._kb_listener is None or not getattr(self._kb_listener, "is_alive", lambda: False)():
+            self._kb_listener = keyboard.Listener(on_press=self._on_key_press)
+            self._kb_listener.daemon = True
+            self._kb_listener.start()
 
-            if startX is not None and startY is not None:
-                self._set_cursor_pos(startX, startY)
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._update_status(Status.Active)
 
-            return True
-        except Exception as e:
-            print(f"Erro durante equipagem da runa: {e}")
-            return False
-        finally:
-            self._action_lock.release()
-
-    def Atacar(self, status: bool):
-        if status:
-            if self._thread and self._thread.is_alive():
-                return
-
-            if self._kb_listener is None or not getattr(self._kb_listener, "is_alive", lambda: False)():
-                self._kb_listener = keyboard.Listener(on_press=self._on_key_press)
-                self._kb_listener.daemon = True
-                self._kb_listener.start()
-
-            self._stop_event.clear()
-            self._thread = threading.Thread(target=self._run, daemon=True)
-            self._thread.start()
-        else:
-            self._stop_event.set()
-            if self._kb_listener:
-                self._kb_listener.stop()
-            self._kb_listener = None
-
-            if self._thread and self._thread.is_alive():
-                self._thread.join()
-            self._thread = None
-
+    def _stop(self):
+        self._stop_event.set()
+        if self._kb_listener:
+            self._kb_listener.stop()
+        if self._thread and self._thread.is_alive():
+            self._thread.join()
+        self._thread = None
+        self._update_status(Status.Inactive)
+                
     def _run(self):
         try:
             while not self._stop_event.is_set():
@@ -117,15 +83,14 @@ class Runa:
         try:
             name = self._key_to_name(key)
             if name == "esc":
-                self._stop_event.set()
+                self._stop()
                 return
             if name in self._mappings:
                 self.equipRuna(name)
         except Exception as e:
             print(f"Erro no _on_key_press: {e}")
 
-    @staticmethod
-    def _key_to_name(key):
+    def _key_to_name(self, key):
         try:
             if hasattr(key, "char") and key.char:
                 return key.char.lower()
@@ -160,9 +125,11 @@ class Runa:
         except Exception as e:
             print(f"Erro ao localizar runa: {e}")
 
+
     def map_key_to_coords(self, key_name: str, x: int, y: int):
         self._mappings[key_name] = (int(x), int(y))
         print(f"Mapeado: '{key_name}' -> ({x}, {y})")
+
 
     def remove_mapping(self, key_name: str):
         if key_name in self._mappings:
@@ -170,6 +137,7 @@ class Runa:
             print(f"Removido mapeamento para '{key_name}'")
         else:
             print(f"Nenhum mapeamento encontrado para '{key_name}'")
+
 
     def list_mappings(self):
         if not self._mappings:
@@ -179,13 +147,14 @@ class Runa:
         for k, v in self._mappings.items():
             print(f"  '{k}' -> X {v[0]}, Y {v[1]}")
 
+
     def resetRuna(self, key_name: str = None):
         if key_name:
-            self.remove_mapping(key_name)
-            self.remove_mapping(key_name)
+            self.remove_mapping(key_name) 
         else:
-            self._mappings = {}
-            self._mappings = {}
+            self._mappings = {} 
+            print("Todos os mapeamentos foram resetados.")
+
 
     def save_mappings(self):
         try:
@@ -195,6 +164,7 @@ class Runa:
             return True
         except Exception as e:
             print(f"Erro ao salvar mapeamentos: {e}")
+
 
     def load_mappings(self):
         try:

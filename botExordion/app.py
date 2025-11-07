@@ -15,10 +15,8 @@ class AppController:
         self._actionManager = None
         self._fishing = None
         self._rune = None
-    
 
 sobrepor_janela = False
-worker_thread = None
 windows = []
 
 def sobrepor_todas_janelas():
@@ -35,7 +33,6 @@ def sobrepor_todas_janelas():
             root.wm_attributes('-topmost', 1 if sobrepor_janela else 0)
         except Exception:
             pass
-
 
 def get_windows():   
     global windows
@@ -60,7 +57,6 @@ def get_windows():
     except Exception as e:
         returnBox.insert("1.0", f"Error getting windows: {str(e)}\n")
 
-
 def select_window():   
     selected = combo.get()
     
@@ -79,19 +75,17 @@ def select_window():
             returnBox.delete("1.0", tk.END)
             returnBox.insert("1.0", f"Selected window: {title}\nHWND: {hwnd}\n")
             
-            # Enable relevant buttons after window selection
             start_btn.configure(state=tk.NORMAL)
             busca_varinha_btn.configure(state=tk.NORMAL)
             busca_water_btn.configure(state=tk.NORMAL)
-            
+            criar_callbacks()
         else:
             returnBox.delete("1.0", tk.END)
             returnBox.insert("1.0", "Selected window not found in list.\n")
             
     except Exception as e:
         returnBox.delete("1.0", tk.END)
-        returnBox.insert("1.0", f"Error selecting window: {str(e)}\n")
-        
+        returnBox.insert("1.0", f"Error selecting window: {str(e)}\n")       
         
 def search_runa():   
     if not appController._rune:
@@ -166,7 +160,7 @@ def reset_runa():
 def start_macro_rune():
     if not appController._rune:
         appController._rune = Runa(appController._actionManager)
-    appController._rune.Atacar(True)
+    appController._rune.Atacar()
     macro_rune_start_btn.config(state=tk.DISABLED)
     macro_rune_stop_btn.config(state=tk.NORMAL)
 
@@ -174,9 +168,9 @@ def stop_macro_rune():
     if not appController._rune:
         appController._rune = Runa(appController._actionManager)  
     try:
-        appController._rune.Atacar(False)
-    except Exception:
-        # se ocorrer erro ao sinalizar, habilita os botões de qualquer forma
+        appController._rune.Atacar()
+    except Exception as e:
+        print(f"Erro ao parar macro de runas: {e}")
         macro_rune_start_btn.config(state=tk.NORMAL)
         macro_rune_stop_btn.config(state=tk.DISABLED)
         return
@@ -254,6 +248,51 @@ def start_pesca():
         start_btn.config(state=tk.NORMAL)
         stop_btn.config(state=tk.DISABLED)
 
+def criar_callbacks():
+    """Conecta as funções de callback aos módulos"""
+    
+    def on_runa_status_changed(new_status):
+        """🎯 Esta função é chamada AUTOMATICAMENTE quando Runa mudar status"""
+        print(f"📢 CALLBACK RUNA: Status recebido -> {new_status}")
+        
+        # Atualiza UI da runa
+        if new_status == Status.Active:
+            macro_rune_start_btn.config(state=tk.DISABLED)
+            macro_rune_stop_btn.config(state=tk.NORMAL)
+        else:
+            macro_rune_start_btn.config(state=tk.NORMAL)
+            macro_rune_stop_btn.config(state=tk.DISABLED) 
+        
+        returnBox.insert("1.0", f"Runas: {new_status}\n")
+        returnBox.see("1.0")
+    
+    def on_fishing_status_changed(new_status):
+        """🎯 Esta função é chamada AUTOMATICAMENTE quando Pesca mudar status"""
+        print(f"📢 CALLBACK PESCA: Status recebido -> {new_status}")
+        
+        # Atualiza UI da pesca
+        if new_status == Status.Active:
+            start_btn.config(state=tk.DISABLED)
+            stop_btn.config(state=tk.NORMAL)
+        else:
+            start_btn.config(state=tk.NORMAL)
+            stop_btn.config(state=tk.DISABLED)
+        
+        returnBox.insert("1.0", f"Pesca: {new_status}\n")
+        returnBox.see("1.0")
+    
+    # ✅ CONECTA os callbacks aos módulos
+    if appController._rune:
+        appController._rune.set_status_callback(on_runa_status_changed)
+    else:
+        appController._rune = Runa(appController._actionManager)
+        appController._rune.set_status_callback(on_runa_status_changed)
+    
+    if appController._fishing:
+        appController._fishing.set_status_callback(on_fishing_status_changed)
+    else:
+        appController._fishing = Pesca(appController._actionManager)
+        appController._fishing.set_status_callback(on_fishing_status_changed)
 
 def stop_pesca():
     """Para a pesca usando o mesmo mecanismo que o ESC (set do _stop_event).

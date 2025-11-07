@@ -14,16 +14,26 @@ class Pesca:
         self.varinha = None
         self.watersCoords = []
         self.status = Status.Inactive
+        self._on_status_change = None
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
+
+    def set_status_callback(self, callback_function):
+        self._on_status_change = callback_function
+        print("Callback de status conectado à Pesca")
+
+    def _update_status(self, new_status):
+        old_status = self.status
+        self.status = new_status
+        if old_status != new_status and self._on_status_change:
+            print(f"Pesca: Status mudou de {old_status} para {new_status}")
+            self._on_status_change(new_status)
 
     def _on_key_press(self, key):
         try:
             if key == keyboard.Key.esc:
                 self.logger.info("ESC pressionado — parando bot")
-                self._stop_event.set()
-                if self._kb_listener:
-                    self._kb_listener.stop()
+                self._stop()
         except Exception as e:
             self.logger.error(f"Erro no handler de tecla: {e}")
 
@@ -44,27 +54,34 @@ class Pesca:
                     self.logger.error("Action manager inválido")
                     return
 
-                # Configura listener
-                self._kb_listener = keyboard.Listener(on_press=self._on_key_press)
-                self._kb_listener.daemon = True
-                self._kb_listener.start()
-
-                self._stop_event.clear()
-                self._thread = threading.Thread(target=self._run, daemon=True)
-                self._thread.start()
-                self.logger.info("Bot de pesca iniciado")
-                self.status = Status.Active
+                self._start()
             else:
-                self.logger.info("Parando bot")
-                self._stop_event.set()
-                if self.on_stop_callback:
-                    self.on_stop_callback()
-                if self._kb_listener:
-                    self._kb_listener.stop()
-                self.status = Status.Inactive
+                self._stop()
         except Exception as e:
             self.logger.error(f"Erro ao iniciar/parar bot: {e}")
 
+    def _start(self):
+        if self._thread and self._thread.is_alive():
+            return
+
+        if self._kb_listener is None or not getattr(self._kb_listener, "is_alive", lambda: False)():
+            self._kb_listener = keyboard.Listener(on_press=self._on_key_press)
+            self._kb_listener.daemon = True
+            self._kb_listener.start()
+
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._update_status(Status.Active)
+
+    def _stop(self):
+        self._stop_event.set()
+        if self._kb_listener:
+            self._kb_listener.stop()
+        if self._thread and self._thread.is_alive():
+            self._thread.join()
+        self._thread = None
+        self._update_status(Status.Inactive)
 
     def getFishingRod(self):
         def _on_click(x, y, button, pressed):
