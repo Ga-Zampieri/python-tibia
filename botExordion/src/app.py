@@ -35,11 +35,9 @@ def get_windows():
     try:
         windows = getWindows(None)
         
-        # Update combobox with window titles
         window_titles = [f"{title} ({hwnd})" for title, hwnd in windows] if windows else []
         combo['values'] = window_titles
         
-        # Select first item if available
         if window_titles:
             combo.set(window_titles[0])
             returnBox.insert("1.0", f"Found {len(window_titles)} windows.\n")
@@ -68,23 +66,14 @@ def select_window():
             returnBox.delete("1.0", tk.END)
             returnBox.insert("1.0", f"Selected window: {title}\nHWND: {hwnd}\n")
             
-            # GARANTIR que os módulos são criados ANTES do overlay
             if not appController._fishing:
                 appController._fishing = Pesca(appController._actionManager)
             if not appController._rune:
                 appController._rune = Runa(appController._actionManager)
-            
-            # Conecta o returnBox ao appController
+        
             appController._main_app_returnBox = returnBox
             
-            # Conecta callbacks
             criar_callbacks()
-            
-            # DEBUG: Verificar se os módulos foram criados
-            print(f"DEBUG: Fishing module: {appController._fishing}")
-            print(f"DEBUG: Rune module: {appController._rune}")
-            
-            # Cria o overlay
             create_overlay(hwnd, appController)
             
             returnBox.insert("1.0", "Overlay criado! Use ALT para interagir.\n")
