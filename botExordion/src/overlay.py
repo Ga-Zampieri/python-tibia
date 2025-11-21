@@ -1,0 +1,484 @@
+import tkinter as tk
+import win32gui
+import win32con
+import win32api
+import time
+from tkinter import ttk
+import io
+import contextlib
+
+# Configurações
+OVERLAY_WIDTH = 300
+OVERLAY_HEIGHT = 255  # Aumentei a altura para caber todos os botões
+ALPHA = 200
+ALT_KEY = 0xA4  # ALT esquerdo
+
+class OverlayApp:
+    def __init__(self, parent_hwnd, app_controller):
+        self.parent_hwnd = parent_hwnd
+        self.app_controller = app_controller
+        self.root = None
+        self.running = True
+        self.is_minimized = False
+        self.minimized_height = 35
+        
+    def create_overlay(self):
+        """Cria a interface do overlay na thread principal"""
+        try:
+            # Cria uma janela Tk independente
+            self.root = tk.Toplevel()
+            self.root.title("Helper Overlay")
+            self.root.overrideredirect(True)
+            self.root.attributes("-topmost", False)
+            self.root.configure(bg='#2a2a2a')
+            self.root.geometry(f"{OVERLAY_WIDTH}x{OVERLAY_HEIGHT}")
+            
+            # Remove o ícone da barra de tarefas
+            self.root.attributes("-toolwindow", True)
+            self.root.attributes("-alpha", 0.3)  # 30% opaco por padrão
+            
+            # Frame principal
+            main_frame = ttk.Frame(self.root, padding="5")
+            main_frame.pack(fill="both", expand=True)
+            
+            # Barra de título personalizada
+            title_bar = ttk.Frame(main_frame, height=20)
+            title_bar.pack(fill="x", pady=(0, 5))
+            title_bar.pack_propagate(False)
+            
+            # Título e botão de minimizar
+            title_label = ttk.Label(title_bar, text="Helper Overlay", 
+                                   font=("Arial", 9, "bold"),
+                                   foreground="white",
+                                   background="#3a3a3a")
+            title_label.pack(side="left", padx=5)
+            
+            # Botão de minimizar
+            self.minimize_btn = ttk.Button(title_bar, text="−", width=2,
+                                          command=self.toggle_minimize)
+            self.minimize_btn.pack(side="right", padx=2)
+            
+            # Container do conteúdo
+            self.content_container = ttk.Frame(main_frame)
+            self.content_container.pack(fill="both", expand=True)
+            
+            # Container principal com layout horizontal
+            horizontal_container = ttk.Frame(self.content_container)
+            horizontal_container.pack(fill="both", expand=True)
+            
+            # Coluna da ESQUERDA - Runa Macros
+            left_column = ttk.Frame(horizontal_container)
+            left_column.pack(side="left", fill="both", expand=True, padx=(0, 3))
+            
+            # Frame para Runa Macros
+            rune_frame = ttk.LabelFrame(left_column, text="Runa Macros", padding="4")
+            rune_frame.pack(fill="both", expand=True)
+            
+            # Hotkey + Get Rune
+            hotkey_frame = ttk.Frame(rune_frame)
+            hotkey_frame.pack(fill="x", pady=(0, 4))
+            
+            ttk.Label(hotkey_frame, text="Hotkey:", font=("Arial", 8)).pack(side="left")
+            self.key_var = tk.StringVar()
+            key_entry = ttk.Entry(hotkey_frame, textvariable=self.key_var, width=4, font=("Arial", 8))
+            key_entry.pack(side="left", padx=3)
+            
+            ttk.Button(hotkey_frame, text="Get Rune", 
+                      command=self.get_runa, width=8).pack(side="left")
+            
+            # Botões de runa em grid 2x2
+            rune_buttons_frame = ttk.Frame(rune_frame)
+            rune_buttons_frame.pack(fill="both", expand=True, pady=2)
+            
+            # Botões com fonte legível
+            btn_style = ttk.Style()
+            btn_style.configure("Compact.TButton", font=("Arial", 8))
+            
+            # Linha 1
+            ttk.Button(rune_buttons_frame, text="List Preset", style="Compact.TButton",
+                      command=self.list_runa).grid(row=0, column=0, sticky="ew", padx=1, pady=1)
+            ttk.Button(rune_buttons_frame, text="Save Preset", style="Compact.TButton",
+                      command=self.save_runa).grid(row=0, column=1, sticky="ew", padx=1, pady=1)
+            
+            # Linha 2
+            ttk.Button(rune_buttons_frame, text="Load Preset", style="Compact.TButton",
+                      command=self.load_runa).grid(row=1, column=0, sticky="ew", padx=1, pady=1)
+            ttk.Button(rune_buttons_frame, text="Reset Runes", style="Compact.TButton",
+                      command=self.reset_runa).grid(row=1, column=1, sticky="ew", padx=1, pady=1)
+            
+            # Configurar pesos iguais para as colunas
+            rune_buttons_frame.columnconfigure(0, weight=1)
+            rune_buttons_frame.columnconfigure(1, weight=1)
+            
+            # Frame para macro runa - REDUZIDO o padding
+            macro_frame = ttk.LabelFrame(rune_frame, text="Macro Control", padding="2")
+            macro_frame.pack(fill="x", pady=(3, 0))
+            
+            self.macro_start_btn = ttk.Button(macro_frame, text="Start Macro", style="Compact.TButton",
+                                             command=self.start_macro_runa)
+            self.macro_start_btn.pack(fill="x", pady=1)
+            
+            self.macro_stop_btn = ttk.Button(macro_frame, text="Stop Macro", style="Compact.TButton",
+                                            command=self.stop_macro_runa, state="disabled")
+            self.macro_stop_btn.pack(fill="x", pady=1)
+            
+            # Coluna da DIREITA - Fishing
+            right_column = ttk.Frame(horizontal_container)
+            right_column.pack(side="right", fill="both", expand=True, padx=(3, 0))
+            
+            # Frame para Fishing - REDUZIDO o padding
+            fishing_frame = ttk.LabelFrame(right_column, text="Fishing", padding="4")
+            fishing_frame.pack(fill="both", expand=True)
+            
+            # Botões de fishing - REDUZIDO o espaçamento
+            ttk.Button(fishing_frame, text="Get Fishing Rod", style="Compact.TButton",
+                      command=self.get_fishing_rod).pack(fill="x", pady=1)
+            ttk.Button(fishing_frame, text="Get Water", style="Compact.TButton",
+                      command=self.get_water).pack(fill="x", pady=1)
+            ttk.Button(fishing_frame, text="Reset Fishing", style="Compact.TButton",
+                      command=self.reset_fishing).pack(fill="x", pady=1)
+            
+            # Botões start/stop fishing - REDUZIDO o espaçamento
+            fishing_control_frame = ttk.Frame(fishing_frame)
+            fishing_control_frame.pack(fill="x", pady=(4, 0))
+            
+            self.fishing_start_btn = ttk.Button(fishing_control_frame, text="Start Fishing", style="Compact.TButton",
+                                               command=self.start_fishing)
+            self.fishing_start_btn.pack(fill="x", pady=1)
+            
+            self.fishing_stop_btn = ttk.Button(fishing_control_frame, text="Stop Fishing", style="Compact.TButton",
+                                              command=self.stop_fishing, state="disabled")
+            self.fishing_stop_btn.pack(fill="x", pady=1)
+            
+            # Botão para fechar - REDUZIDO o espaçamento
+            close_frame = ttk.Frame(self.content_container)
+            close_frame.pack(fill="x", pady=(5, 0))
+            
+            ttk.Button(close_frame, text="Close Overlay", style="Compact.TButton",
+                      command=self.close_overlay).pack(fill="x")
+            
+            # Configurações da janela
+            self.setup_window()
+            
+            # Inicia a sincronização
+            self.start_sync()
+            
+            print("Overlay com altura ajustada criado com sucesso!")
+            
+        except Exception as e:
+            print(f"Erro ao criar overlay: {e}")
+    
+    def toggle_minimize(self):
+        """Alterna entre minimizado e normal"""
+        if self.is_minimized:
+            # Restaura
+            self.root.geometry(f"{OVERLAY_WIDTH}x{OVERLAY_HEIGHT}")
+            self.content_container.pack(fill="both", expand=True)
+            self.minimize_btn.config(text="−")
+            self.is_minimized = False
+        else:
+            # Minimiza
+            self.root.geometry(f"{OVERLAY_WIDTH}x{self.minimized_height}")
+            self.content_container.pack_forget()
+            self.minimize_btn.config(text="+")
+            self.is_minimized = True
+        
+    def setup_window(self):
+        """Configura as propriedades da janela overlay"""
+        try:
+            hwnd_overlay = self.root.winfo_id()
+            
+            # Estilo para overlay com transparência
+            style = win32gui.GetWindowLong(hwnd_overlay, win32con.GWL_EXSTYLE)
+            style |= win32con.WS_EX_LAYERED
+            style |= win32con.WS_EX_TRANSPARENT
+            win32gui.SetWindowLong(hwnd_overlay, win32con.GWL_EXSTYLE, style)
+            
+            # Define transparência
+            win32gui.SetLayeredWindowAttributes(hwnd_overlay, 0, ALPHA, win32con.LWA_ALPHA)
+            
+            # Torna filha da janela pai
+            win32gui.SetWindowLong(hwnd_overlay, win32con.GWL_HWNDPARENT, self.parent_hwnd)
+            
+        except Exception as e:
+            print(f"Erro no setup_window: {e}")
+    
+    def start_sync(self):
+        """Inicia a sincronização usando after()"""
+        self.sync_position()
+    
+    def sync_position(self):
+        """Sincroniza a posição do overlay com a janela pai"""
+        if not self.running or not self.root or not self.parent_hwnd:
+            return
+            
+        try:
+            # Verifica se a janela pai ainda existe
+            if not win32gui.IsWindow(self.parent_hwnd):
+                print("Janela pai não existe mais")
+                self.close_overlay()
+                return
+            
+            # Obtém estado e posição da janela pai
+            parent_rect = win32gui.GetWindowRect(self.parent_hwnd)
+            parent_left, parent_top, parent_right, parent_bottom = parent_rect
+            
+            # Verifica se a janela pai está minimizada
+            if win32gui.IsIconic(self.parent_hwnd):
+                self.root.withdraw()
+            else:
+                self.root.deiconify()
+                
+                # Altura atual baseada no estado de minimização
+                current_height = self.minimized_height if self.is_minimized else OVERLAY_HEIGHT
+                
+                # Posiciona no canto INFERIOR ESQUERDO
+                overlay_x = parent_left + 10
+                overlay_y = parent_bottom - current_height - 10
+                
+                # Atualiza geometria
+                self.root.geometry(f"{OVERLAY_WIDTH}x{current_height}+{overlay_x}+{overlay_y}")
+                
+                # Sincroniza o estado "always on top"
+                parent_style = win32gui.GetWindowLong(self.parent_hwnd, win32con.GWL_EXSTYLE)
+                is_parent_topmost = (parent_style & win32con.WS_EX_TOPMOST) != 0
+                
+                if is_parent_topmost:
+                    self.root.attributes("-topmost", True)
+                else:
+                    self.root.attributes("-topmost", False)
+            
+            # Controle de opacidade e click-through baseado na tecla ALT
+            alt_down = win32api.GetAsyncKeyState(ALT_KEY) & 0x8000
+            hwnd_overlay = self.root.winfo_id()
+            
+            if alt_down:
+                self.disable_click_passthrough(hwnd_overlay)
+                self.root.attributes("-alpha", 0.7)  # 70% opaco com ALT
+            else:
+                self.enable_click_passthrough(hwnd_overlay)
+                self.root.attributes("-alpha", 0.3)  # 30% opaco sem ALT
+                
+        except Exception as e:
+            print(f"Erro no sync_position: {e}")
+        
+        # Agenda a próxima sincronização
+        if self.running:
+            self.root.after(50, self.sync_position)
+    
+    def enable_click_passthrough(self, hwnd):
+        """Ativa o click-through"""
+        try:
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
+                                 style | win32con.WS_EX_TRANSPARENT)
+        except Exception as e:
+            print(f"Erro enable_click_passthrough: {e}")
+    
+    def disable_click_passthrough(self, hwnd):
+        """Desativa o click-through"""
+        try:
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
+                                 style & ~win32con.WS_EX_TRANSPARENT)
+        except Exception as e:
+            print(f"Erro disable_click_passthrough: {e}")
+    
+    # Métodos para Runa (mantidos iguais)
+    def get_runa(self):
+        try:
+            if self.app_controller._rune:
+                key_name = self.key_var.get()
+                if not key_name:
+                    self.log_to_main_app("Erro: Informe uma hotkey primeiro")
+                    return
+                    
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._rune.getRuna(key_name=key_name)
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em get_runa: {e}")
+    
+    def list_runa(self):
+        try:
+            if self.app_controller._rune:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._rune.list_mappings()
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em list_runa: {e}")
+    
+    def save_runa(self):
+        try:
+            if self.app_controller._rune:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._rune.save_mappings()
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em save_runa: {e}")
+    
+    def load_runa(self):
+        try:
+            if self.app_controller._rune:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._rune.load_mappings()
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em load_runa: {e}")
+    
+    def reset_runa(self):
+        try:
+            if self.app_controller._rune:
+                key_name = self.key_var.get()
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._rune.resetRuna(key_name=key_name if key_name else None)
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em reset_runa: {e}")
+    
+    def start_macro_runa(self):
+        try:
+            if self.app_controller._rune:
+                self.app_controller._rune.Atacar()
+        except Exception as e:
+            self.log_to_main_app(f"Erro em start_macro_runa: {e}")
+    
+    def stop_macro_runa(self):
+        try:
+            if self.app_controller._rune:
+                self.app_controller._rune.Atacar()
+        except Exception as e:
+            self.log_to_main_app(f"Erro em stop_macro_runa: {e}")
+    
+    # Métodos para Pesca (mantidos iguais)
+    def get_fishing_rod(self):
+        try:
+            if self.app_controller._fishing:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._fishing.getFishingRod()
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em get_fishing_rod: {e}")
+    
+    def get_water(self):
+        try:
+            if self.app_controller._fishing:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._fishing.getWaters()
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em get_water: {e}")
+    
+    def reset_fishing(self):
+        try:
+            if self.app_controller._fishing:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.app_controller._fishing.resetCoordinates()
+                out = buf.getvalue()
+                self.log_to_main_app(out)
+        except Exception as e:
+            self.log_to_main_app(f"Erro em reset_fishing: {e}")
+    
+    def start_fishing(self):
+        try:
+            if self.app_controller._fishing:
+                if self.app_controller._fishing.varinha is None:
+                    self.log_to_main_app("Erro: Defina a varinha primeiro.")
+                    return
+                if not self.app_controller._fishing.watersCoords:
+                    self.log_to_main_app("Erro: Defina as águas primeiro.")
+                    return
+                    
+                if self.app_controller._fishing.status == 0:
+                    self.app_controller._fishing.Pescar()
+        except Exception as e:
+            self.log_to_main_app(f"Erro em start_fishing: {e}")
+    
+    def stop_fishing(self):
+        try:
+            if self.app_controller._fishing:
+                self.app_controller._fishing._stop()
+        except Exception as e:
+            self.log_to_main_app(f"Erro em stop_fishing: {e}")
+    
+    def log_to_main_app(self, message):
+        """Envia mensagens para a aplicação principal"""
+        try:
+            if hasattr(self.app_controller, '_main_app_returnBox'):
+                returnBox = self.app_controller._main_app_returnBox
+                returnBox.delete("1.0", tk.END)
+                returnBox.insert("1.0", message)
+                returnBox.see("1.0")
+        except Exception as e:
+            print(f"Erro ao logar na app principal: {e}")
+    
+    def close_overlay(self):
+        """Fecha o overlay"""
+        try:
+            self.running = False
+            if self.root:
+                self.root.destroy()
+            print("Overlay fechado")
+        except Exception as e:
+            print(f"Erro ao fechar overlay: {e}")
+
+# Variável global para instância do overlay
+overlay_instance = None
+
+def create_overlay(parent_hwnd, app_controller):
+    """Cria o overlay para a janela especificada"""
+    global overlay_instance
+    
+    try:
+        if overlay_instance:
+            overlay_instance.close_overlay()
+            time.sleep(0.1)
+        
+        overlay_instance = OverlayApp(parent_hwnd, app_controller)
+        overlay_instance.create_overlay()
+        
+        return overlay_instance
+        
+    except Exception as e:
+        print(f"Erro em create_overlay: {e}")
+        return None
+
+def update_overlay_buttons():
+    """Atualiza o estado dos botões no overlay"""
+    global overlay_instance
+    if overlay_instance and overlay_instance.root:
+        try:
+            if overlay_instance.app_controller._rune:
+                status = overlay_instance.app_controller._rune.status
+                if status == 1:
+                    overlay_instance.macro_start_btn.config(state="disabled")
+                    overlay_instance.macro_stop_btn.config(state="normal")
+                else:
+                    overlay_instance.macro_start_btn.config(state="normal")
+                    overlay_instance.macro_stop_btn.config(state="disabled")
+            
+            if overlay_instance.app_controller._fishing:
+                status = overlay_instance.app_controller._fishing.status
+                if status == 1:
+                    overlay_instance.fishing_start_btn.config(state="disabled")
+                    overlay_instance.fishing_stop_btn.config(state="normal")
+                else:
+                    overlay_instance.fishing_start_btn.config(state="normal")
+                    overlay_instance.fishing_stop_btn.config(state="disabled")
+        except Exception as e:
+            print(f"Erro em update_overlay_buttons: {e}")

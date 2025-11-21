@@ -3,7 +3,7 @@ import threading
 import os
 import json
 from time import sleep
-from .status import Status
+from status import Status
 
 
 class Runa:
@@ -113,7 +113,6 @@ class Runa:
             listener.stop()
             if 'x' in coords:
                 if key_name:
-                    self.map_key_to_coords(key_name, coords['x'], coords['y'])
                     self.map_key_to_coords(key_name, coords['x'], coords['y'])
                     return True
                 else:

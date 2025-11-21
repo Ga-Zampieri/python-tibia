@@ -213,3 +213,5 @@ assets/output_vendiveis.txt
 assets/output_compraveis.txt
 
 .venv/
+
+*.exe

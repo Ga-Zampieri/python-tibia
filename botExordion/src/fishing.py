@@ -3,7 +3,7 @@ import logging
 from pynput import mouse, keyboard
 import threading
 import time
-from .status import Status
+from status import Status
 
 class Pesca:
     def __init__(self, action_manager):
