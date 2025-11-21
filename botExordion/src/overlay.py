@@ -3,13 +3,14 @@ import win32gui
 import win32con
 import win32api
 import time
+import threading
 from tkinter import ttk
 import io
 import contextlib
 
 # Configurações
 OVERLAY_WIDTH = 300
-OVERLAY_HEIGHT = 255  # Aumentei a altura para caber todos os botões
+OVERLAY_HEIGHT = 255
 ALPHA = 200
 ALT_KEY = 0xA4  # ALT esquerdo
 
@@ -21,6 +22,7 @@ class OverlayApp:
         self.running = True
         self.is_minimized = False
         self.minimized_height = 35
+        self.click_through_enabled = True
         
     def create_overlay(self):
         """Cria a interface do overlay na thread principal"""
@@ -35,7 +37,7 @@ class OverlayApp:
             
             # Remove o ícone da barra de tarefas
             self.root.attributes("-toolwindow", True)
-            self.root.attributes("-alpha", 0.3)  # 30% opaco por padrão
+            self.root.attributes("-alpha", 0.3)
             
             # Frame principal
             main_frame = ttk.Frame(self.root, padding="5")
@@ -110,7 +112,7 @@ class OverlayApp:
             rune_buttons_frame.columnconfigure(0, weight=1)
             rune_buttons_frame.columnconfigure(1, weight=1)
             
-            # Frame para macro runa - REDUZIDO o padding
+            # Frame para macro runa
             macro_frame = ttk.LabelFrame(rune_frame, text="Macro Control", padding="2")
             macro_frame.pack(fill="x", pady=(3, 0))
             
@@ -126,11 +128,11 @@ class OverlayApp:
             right_column = ttk.Frame(horizontal_container)
             right_column.pack(side="right", fill="both", expand=True, padx=(3, 0))
             
-            # Frame para Fishing - REDUZIDO o padding
+            # Frame para Fishing
             fishing_frame = ttk.LabelFrame(right_column, text="Fishing", padding="4")
             fishing_frame.pack(fill="both", expand=True)
             
-            # Botões de fishing - REDUZIDO o espaçamento
+            # Botões de fishing
             ttk.Button(fishing_frame, text="Get Fishing Rod", style="Compact.TButton",
                       command=self.get_fishing_rod).pack(fill="x", pady=1)
             ttk.Button(fishing_frame, text="Get Water", style="Compact.TButton",
@@ -138,7 +140,7 @@ class OverlayApp:
             ttk.Button(fishing_frame, text="Reset Fishing", style="Compact.TButton",
                       command=self.reset_fishing).pack(fill="x", pady=1)
             
-            # Botões start/stop fishing - REDUZIDO o espaçamento
+            # Botões start/stop fishing
             fishing_control_frame = ttk.Frame(fishing_frame)
             fishing_control_frame.pack(fill="x", pady=(4, 0))
             
@@ -150,7 +152,7 @@ class OverlayApp:
                                               command=self.stop_fishing, state="disabled")
             self.fishing_stop_btn.pack(fill="x", pady=1)
             
-            # Botão para fechar - REDUZIDO o espaçamento
+            # Botão para fechar
             close_frame = ttk.Frame(self.content_container)
             close_frame.pack(fill="x", pady=(5, 0))
             
@@ -163,26 +165,42 @@ class OverlayApp:
             # Inicia a sincronização
             self.start_sync()
             
-            print("Overlay com altura ajustada criado com sucesso!")
+            print("Overlay criado com sucesso!")
             
         except Exception as e:
             print(f"Erro ao criar overlay: {e}")
     
     def toggle_minimize(self):
         """Alterna entre minimizado e normal"""
-        if self.is_minimized:
-            # Restaura
-            self.root.geometry(f"{OVERLAY_WIDTH}x{OVERLAY_HEIGHT}")
-            self.content_container.pack(fill="both", expand=True)
-            self.minimize_btn.config(text="−")
-            self.is_minimized = False
-        else:
-            # Minimiza
-            self.root.geometry(f"{OVERLAY_WIDTH}x{self.minimized_height}")
-            self.content_container.pack_forget()
-            self.minimize_btn.config(text="+")
-            self.is_minimized = True
+        try:
+            if self.is_minimized:
+                # Restaura
+                self.root.geometry(f"{OVERLAY_WIDTH}x{OVERLAY_HEIGHT}")
+                self.content_container.pack(fill="both", expand=True)
+                self.minimize_btn.config(text="−")
+                self.is_minimized = False
+                print("Overlay restaurado")
+            else:
+                # Minimiza
+                self.root.geometry(f"{OVERLAY_WIDTH}x{self.minimized_height}")
+                self.content_container.pack_forget()
+                self.minimize_btn.config(text="+")
+                self.is_minimized = True
+                print("Overlay minimizado")
+        except Exception as e:
+            print(f"Erro em toggle_minimize: {e}")
         
+    def close_overlay(self):
+        """Fecha o overlay"""
+        try:
+            self.running = False
+            if self.root:
+                self.root.quit()
+                self.root.destroy()
+            print("Overlay fechado")
+        except Exception as e:
+            print(f"Erro ao fechar overlay: {e}")
+    
     def setup_window(self):
         """Configura as propriedades da janela overlay"""
         try:
@@ -191,7 +209,11 @@ class OverlayApp:
             # Estilo para overlay com transparência
             style = win32gui.GetWindowLong(hwnd_overlay, win32con.GWL_EXSTYLE)
             style |= win32con.WS_EX_LAYERED
+            
+            # Inicialmente com click-through ativado
             style |= win32con.WS_EX_TRANSPARENT
+            self.click_through_enabled = True
+            
             win32gui.SetWindowLong(hwnd_overlay, win32con.GWL_EXSTYLE, style)
             
             # Define transparência
@@ -253,10 +275,14 @@ class OverlayApp:
             hwnd_overlay = self.root.winfo_id()
             
             if alt_down:
-                self.disable_click_passthrough(hwnd_overlay)
+                if self.click_through_enabled:
+                    self.disable_click_passthrough(hwnd_overlay)
+                    self.click_through_enabled = False
                 self.root.attributes("-alpha", 0.7)  # 70% opaco com ALT
             else:
-                self.enable_click_passthrough(hwnd_overlay)
+                if not self.click_through_enabled:
+                    self.enable_click_passthrough(hwnd_overlay)
+                    self.click_through_enabled = True
                 self.root.attributes("-alpha", 0.3)  # 30% opaco sem ALT
                 
         except Exception as e:
@@ -270,8 +296,9 @@ class OverlayApp:
         """Ativa o click-through"""
         try:
             style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
-                                 style | win32con.WS_EX_TRANSPARENT)
+            new_style = style | win32con.WS_EX_TRANSPARENT
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, new_style)
+            print("Click-through ATIVADO")
         except Exception as e:
             print(f"Erro enable_click_passthrough: {e}")
     
@@ -279,12 +306,13 @@ class OverlayApp:
         """Desativa o click-through"""
         try:
             style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
-                                 style & ~win32con.WS_EX_TRANSPARENT)
+            new_style = style & ~win32con.WS_EX_TRANSPARENT
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, new_style)
+            print("Click-through DESATIVADO")
         except Exception as e:
             print(f"Erro disable_click_passthrough: {e}")
     
-    # Métodos para Runa (mantidos iguais)
+    # Métodos para Runa
     def get_runa(self):
         try:
             if self.app_controller._rune:
@@ -360,7 +388,7 @@ class OverlayApp:
         except Exception as e:
             self.log_to_main_app(f"Erro em stop_macro_runa: {e}")
     
-    # Métodos para Pesca (mantidos iguais)
+    # Métodos para Pesca
     def get_fishing_rod(self):
         try:
             if self.app_controller._fishing:
@@ -426,16 +454,6 @@ class OverlayApp:
                 returnBox.see("1.0")
         except Exception as e:
             print(f"Erro ao logar na app principal: {e}")
-    
-    def close_overlay(self):
-        """Fecha o overlay"""
-        try:
-            self.running = False
-            if self.root:
-                self.root.destroy()
-            print("Overlay fechado")
-        except Exception as e:
-            print(f"Erro ao fechar overlay: {e}")
 
 # Variável global para instância do overlay
 overlay_instance = None
@@ -445,10 +463,15 @@ def create_overlay(parent_hwnd, app_controller):
     global overlay_instance
     
     try:
+        # Fecha overlay existente
         if overlay_instance:
-            overlay_instance.close_overlay()
+            try:
+                overlay_instance.close_overlay()
+            except Exception as e:
+                print(f"Erro ao fechar overlay existente: {e}")
             time.sleep(0.1)
         
+        # Cria novo overlay
         overlay_instance = OverlayApp(parent_hwnd, app_controller)
         overlay_instance.create_overlay()
         

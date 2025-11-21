@@ -15,6 +15,8 @@ sys.path.insert(0, base_path)
 
 from action_manager import ActionManager
 from overlay import create_overlay, update_overlay_buttons
+from fishing import Pesca
+from macro_rune import Runa
 
 class AppController:
     def __init__(self):
@@ -65,15 +67,35 @@ def select_window():
             
             returnBox.delete("1.0", tk.END)
             returnBox.insert("1.0", f"Selected window: {title}\nHWND: {hwnd}\n")
+            
+            # GARANTIR que os módulos são criados ANTES do overlay
+            if not appController._fishing:
+                appController._fishing = Pesca(appController._actionManager)
+            if not appController._rune:
+                appController._rune = Runa(appController._actionManager)
+            
+            # Conecta o returnBox ao appController
+            appController._main_app_returnBox = returnBox
+            
+            # Conecta callbacks
             criar_callbacks()
+            
+            # DEBUG: Verificar se os módulos foram criados
+            print(f"DEBUG: Fishing module: {appController._fishing}")
+            print(f"DEBUG: Rune module: {appController._rune}")
+            
+            # Cria o overlay
             create_overlay(hwnd, appController)
+            
+            returnBox.insert("1.0", "Overlay criado! Use ALT para interagir.\n")
+            
         else:
             returnBox.delete("1.0", tk.END)
             returnBox.insert("1.0", "Selected window not found in list.\n")
             
     except Exception as e:
         returnBox.delete("1.0", tk.END)
-        returnBox.insert("1.0", f"Error selecting window: {str(e)}\n")    
+        returnBox.insert("1.0", f"Error selecting window: {str(e)}\n")  
 
 def criar_callbacks():
     """Conecta as funções de callback aos módulos"""
