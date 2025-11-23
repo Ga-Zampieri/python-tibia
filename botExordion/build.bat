@@ -10,9 +10,9 @@ pyinstaller --onefile --windowed --name="BotExordion" --clean --hidden-import=st
 
 if %errorlevel% == 0 (
     echo.
-    echo SUCCESSO! Executavel criado em: dist\BotExordion.exe
+    echo SUCCESSO! Executavel criado em: BotExordion.exe
     echo.
-    echo Para testar, execute: dist\BotExordion.exe
+    echo Para abrir, execute: BotExordion.exe
 ) else (
     echo.
     echo ERRO na compilacao!
