@@ -21,40 +21,34 @@ class ActionManager:
         self.logger = logging.getLogger(__name__)
 
     def left_click(self, pos):
-        try:
-            while (win32api.GetKeyState(win32con.VK_CONTROL) < 0 or
-                win32api.GetKeyState(win32con.VK_SHIFT) < 0 or
-                win32api.GetKeyState(win32con.VK_MENU) < 0 or
-                win32api.GetKeyState(left_mouse_down) < 0 or
-                win32api.GetKeyState(right_mouse_down) < 0):
-                time.sleep(0.005)
-                
-                
-            x, y = pos
-            client_pos = win32gui.ScreenToClient(self.hwnd, (x, y))
-            LongPositionToClick = win32api.MAKELONG(client_pos[0], client_pos[1])
-            win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
-            win32api.SendMessage(self.hwnd, win32con.WM_LBUTTONDOWN, win32con.VK_LBUTTON, LongPositionToClick)
-            win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
-            win32api.SendMessage(self.hwnd, win32con.WM_LBUTTONUP, win32con.VK_LBUTTON, LongPositionToClick)
-            return True
-        except Exception as e:
-            self.logger.error(f"Erro no left_click: {e}")
-            return False
+        while (win32api.GetKeyState(win32con.VK_CONTROL) < 0 or
+            win32api.GetKeyState(win32con.VK_SHIFT) < 0 or
+            win32api.GetKeyState(win32con.VK_MENU) < 0 or
+            win32api.GetKeyState(left_mouse_down) < 0 or
+            win32api.GetKeyState(right_mouse_down) < 0):
+            time.sleep(0.005)
+
+        client_pos = win32gui.ScreenToClient(self.hwnd, (pos[0], pos[1]))
+        LongPositionToClick = win32api.MAKELONG(client_pos[0], client_pos[1])
+        win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
+        win32api.SendMessage(self.hwnd, win32con.WM_LBUTTONDOWN, win32con.VK_LBUTTON, LongPositionToClick)
+        win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
+        win32api.SendMessage(self.hwnd, win32con.WM_LBUTTONUP, win32con.VK_LBUTTON, LongPositionToClick)
 
     def right_click(self, pos):
-        try:
-            x, y = pos
-            client_pos = win32gui.ScreenToClient(self.hwnd, (x, y))
-            LongPositionToClick = win32api.MAKELONG(client_pos[0], client_pos[1])
-            win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
-            win32api.SendMessage(self.hwnd, win32con.WM_RBUTTONDOWN, win32con.VK_RBUTTON, LongPositionToClick)
-            win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
-            win32api.SendMessage(self.hwnd, win32con.WM_RBUTTONUP, win32con.VK_RBUTTON, LongPositionToClick)
-            return True
-        except Exception as e:
-            self.logger.error(f"Erro no right_click: {e}")
-            return False
+        while (win32api.GetKeyState(win32con.VK_CONTROL) < 0 or
+            win32api.GetKeyState(win32con.VK_SHIFT) < 0 or
+            win32api.GetKeyState(win32con.VK_MENU) < 0 or
+            win32api.GetKeyState(left_mouse_down) < 0 or
+            win32api.GetKeyState(right_mouse_down) < 0):
+            time.sleep(0.005)
+            
+        client_pos = win32gui.ScreenToClient(self.hwnd, (pos[0], pos[1]))
+        LongPositionToClick = win32api.MAKELONG(client_pos[0], client_pos[1])
+        win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
+        win32api.SendMessage(self.hwnd, win32con.WM_RBUTTONDOWN, win32con.VK_RBUTTON, LongPositionToClick)
+        win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
+        win32api.SendMessage(self.hwnd, win32con.WM_RBUTTONUP, win32con.VK_RBUTTON, LongPositionToClick)
 
     def get_cursor_position(self):
         try:
@@ -65,15 +59,15 @@ class ActionManager:
             return (0, 0)
 
     def move_mouse(self, pos):
-        try:
-            x, y = int(pos[0]), int(pos[1])
-            client_pos = win32gui.ScreenToClient(self.hwnd, (x, y))
-            LongPositionToClick = win32api.MAKELONG(client_pos[0], client_pos[1])
-            win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
-            return True
-        except Exception as e:
-            self.logger.error(f"Erro ao mover mouse: {e}")
-            return False
+        while (win32api.GetKeyState(win32con.VK_CONTROL) < 0 or
+            win32api.GetKeyState(win32con.VK_SHIFT) < 0 or
+            win32api.GetKeyState(win32con.VK_MENU) < 0 or
+            win32api.GetKeyState(left_mouse_down) < 0 or
+            win32api.GetKeyState(right_mouse_down) < 0):
+            time.sleep(0.005)
+        client_pos = win32gui.ScreenToClient(self.hwnd, (pos[0], pos[1]))
+        LongPositionToClick = win32api.MAKELONG(client_pos[0], client_pos[1])
+        win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
 
     def focusWindow(self):
         try:

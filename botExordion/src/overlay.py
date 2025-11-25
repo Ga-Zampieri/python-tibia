@@ -12,7 +12,6 @@ import contextlib
 OVERLAY_WIDTH = 300
 OVERLAY_HEIGHT = 255
 ALPHA = 200
-ALT_KEY = 0xA4  # ALT esquerdo
 
 class OverlayApp:
     def __init__(self, parent_hwnd, app_controller):
@@ -22,7 +21,6 @@ class OverlayApp:
         self.running = True
         self.is_minimized = False
         self.minimized_height = 35
-        self.click_through_enabled = True
         
     def create_overlay(self):
         """Cria a interface do overlay na thread principal"""
@@ -37,7 +35,7 @@ class OverlayApp:
             
             # Remove o ícone da barra de tarefas
             self.root.attributes("-toolwindow", True)
-            self.root.attributes("-alpha", 0.3)
+            self.root.attributes("-alpha", 0.8)  # Mais opaco para melhor visibilidade
             
             # Frame principal
             main_frame = ttk.Frame(self.root, padding="5")
@@ -165,7 +163,7 @@ class OverlayApp:
             # Inicia a sincronização
             self.start_sync()
             
-            print("Overlay criado com sucesso!")
+            print("Overlay criado com sucesso! (Sempre clicável)")
             
         except Exception as e:
             print(f"Erro ao criar overlay: {e}")
@@ -205,21 +203,13 @@ class OverlayApp:
         """Configura as propriedades da janela overlay"""
         try:
             hwnd_overlay = self.root.winfo_id()
-            
-            # Estilo para overlay com transparência
             style = win32gui.GetWindowLong(hwnd_overlay, win32con.GWL_EXSTYLE)
             style |= win32con.WS_EX_LAYERED
             
-            # Inicialmente com click-through ativado
-            style |= win32con.WS_EX_TRANSPARENT
-            self.click_through_enabled = True
-            
             win32gui.SetWindowLong(hwnd_overlay, win32con.GWL_EXSTYLE, style)
             
-            # Define transparência
             win32gui.SetLayeredWindowAttributes(hwnd_overlay, 0, ALPHA, win32con.LWA_ALPHA)
-            
-            # Torna filha da janela pai
+        
             win32gui.SetWindowLong(hwnd_overlay, win32con.GWL_HWNDPARENT, self.parent_hwnd)
             
         except Exception as e:
@@ -245,23 +235,16 @@ class OverlayApp:
             parent_rect = win32gui.GetWindowRect(self.parent_hwnd)
             parent_left, parent_top, parent_right, parent_bottom = parent_rect
             
-            # Verifica se a janela pai está minimizada
             if win32gui.IsIconic(self.parent_hwnd):
                 self.root.withdraw()
             else:
                 self.root.deiconify()
-                
-                # Altura atual baseada no estado de minimização
                 current_height = self.minimized_height if self.is_minimized else OVERLAY_HEIGHT
-                
-                # Posiciona no canto INFERIOR ESQUERDO
                 overlay_x = parent_left + 10
                 overlay_y = parent_bottom - current_height - 10
                 
-                # Atualiza geometria
                 self.root.geometry(f"{OVERLAY_WIDTH}x{current_height}+{overlay_x}+{overlay_y}")
                 
-                # Sincroniza o estado "always on top"
                 parent_style = win32gui.GetWindowLong(self.parent_hwnd, win32con.GWL_EXSTYLE)
                 is_parent_topmost = (parent_style & win32con.WS_EX_TOPMOST) != 0
                 
@@ -270,47 +253,14 @@ class OverlayApp:
                 else:
                     self.root.attributes("-topmost", False)
             
-            # Controle de opacidade e click-through baseado na tecla ALT
-            alt_down = win32api.GetAsyncKeyState(ALT_KEY) & 0x8000
-            hwnd_overlay = self.root.winfo_id()
+            self.root.attributes("-alpha", 0.8)  # Opacidade fixa
             
-            if alt_down:
-                if self.click_through_enabled:
-                    self.disable_click_passthrough(hwnd_overlay)
-                    self.click_through_enabled = False
-                self.root.attributes("-alpha", 0.7)  # 70% opaco com ALT
-            else:
-                if not self.click_through_enabled:
-                    self.enable_click_passthrough(hwnd_overlay)
-                    self.click_through_enabled = True
-                self.root.attributes("-alpha", 0.3)  # 30% opaco sem ALT
-                
         except Exception as e:
             print(f"Erro no sync_position: {e}")
         
         # Agenda a próxima sincronização
         if self.running:
-            self.root.after(50, self.sync_position)
-    
-    def enable_click_passthrough(self, hwnd):
-        """Ativa o click-through"""
-        try:
-            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            new_style = style | win32con.WS_EX_TRANSPARENT
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, new_style)
-            print("Click-through ATIVADO")
-        except Exception as e:
-            print(f"Erro enable_click_passthrough: {e}")
-    
-    def disable_click_passthrough(self, hwnd):
-        """Desativa o click-through"""
-        try:
-            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            new_style = style & ~win32con.WS_EX_TRANSPARENT
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, new_style)
-            print("Click-through DESATIVADO")
-        except Exception as e:
-            print(f"Erro disable_click_passthrough: {e}")
+            self.root.after(500, self.sync_position)
     
     # Métodos para Runa
     def get_runa(self):

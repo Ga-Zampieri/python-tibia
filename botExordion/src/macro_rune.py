@@ -73,31 +73,22 @@ class Runa:
         self._update_status(Status.Inactive)
                 
     def _run(self):
-        try:
-            while not self._stop_event.is_set():
-                sleep(0.1)
-        except Exception as e:
-            print(f"Erro no loop de ataque: {e}")
+        while not self._stop_event.is_set():
+            sleep(0.05)
 
     def _on_key_press(self, key):
-        try:
-            name = self._key_to_name(key)
-            if name == "esc":
-                self._stop()
-                return
-            if name in self._mappings:
-                self.equipRuna(name)
-        except Exception as e:
-            print(f"Erro no _on_key_press: {e}")
+        name = self._key_to_name(key)
+        if name == "esc":
+            self._stop()
+            return
+        if name in self._mappings:
+            self.equipRuna(name)
 
     def _key_to_name(self, key):
-        try:
-            if hasattr(key, "char") and key.char:
-                return key.char.lower()
-            if hasattr(key, "name"):
-                return key.name.lower()
-        except Exception:
-            pass
+        if hasattr(key, "char") and key.char:
+            return key.char.lower()
+        if hasattr(key, "name"):
+            return key.name.lower()
         return str(key).lower()
 
     def getRuna(self, key_name: str = None, timeout: int = 10):
@@ -105,24 +96,22 @@ class Runa:
             if pressed:
                 coords['x'], coords['y'] = int(x), int(y)
                 return False
-        try:
-            coords = {}
-            listener = mouse.Listener(on_click=_on_click)
-            listener.start()
-            listener.join(timeout)
-            listener.stop()
-            if 'x' in coords:
-                if key_name:
-                    self.map_key_to_coords(key_name, coords['x'], coords['y'])
-                    return True
-                else:
-                    print("Necessário informar uma hotkey para bindar a runa capturada.")
-                    return False
+        coords = {}
+        listener = mouse.Listener(on_click=_on_click)
+        listener.start()
+        listener.join(timeout)
+        listener.stop()
+        if 'x' in coords:
+            if key_name:
+                self.map_key_to_coords(key_name, coords['x'], coords['y'])
+                return True
             else:
-                print("Nenhuma coordenada registrada (timeout).")
+                print("Necessário informar uma hotkey para bindar a runa capturada.")
                 return False
-        except Exception as e:
-            print(f"Erro ao localizar runa: {e}")
+        else:
+            print("Nenhuma coordenada registrada (timeout).")
+            return False
+    
 
 
     def map_key_to_coords(self, key_name: str, x: int, y: int):
