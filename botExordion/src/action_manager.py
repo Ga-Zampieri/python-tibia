@@ -34,6 +34,7 @@ class ActionManager:
         win32api.SendMessage(self.hwnd, win32con.WM_LBUTTONDOWN, win32con.VK_LBUTTON, LongPositionToClick)
         win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
         win32api.SendMessage(self.hwnd, win32con.WM_LBUTTONUP, win32con.VK_LBUTTON, LongPositionToClick)
+        return True
 
     def right_click(self, pos):
         while (win32api.GetKeyState(win32con.VK_CONTROL) < 0 or
@@ -49,6 +50,7 @@ class ActionManager:
         win32api.SendMessage(self.hwnd, win32con.WM_RBUTTONDOWN, win32con.VK_RBUTTON, LongPositionToClick)
         win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
         win32api.SendMessage(self.hwnd, win32con.WM_RBUTTONUP, win32con.VK_RBUTTON, LongPositionToClick)
+        return True
 
     def get_cursor_position(self):
         try:
