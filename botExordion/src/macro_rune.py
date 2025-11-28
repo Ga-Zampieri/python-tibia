@@ -44,7 +44,6 @@ class Runa:
             print(f"Nenhuma runa mapeada para a tecla '{key_name}'.")
             return False
 
-        self._action_manager.move_mouse(coords) 
         self._action_manager.right_click(coords)
         sleep(0.05)
         return True

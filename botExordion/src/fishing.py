@@ -150,13 +150,10 @@ class Pesca:
                     varinha_pos = (self.varinha[0] + randX, self.varinha[1] + randY)
                     water_pos = (water[0] + randX, water[1] + randY)
 
-                    self._action_manager.move_mouse(varinha_pos) 
-                    if not self._action_manager.right_click(varinha_pos):
-                        continue
+                    self._action_manager.right_click(varinha_pos)
+                        
                     time.sleep(0.5)
-                    self._action_manager.move_mouse(water_pos) 
-                    if not self._action_manager.left_click(water_pos):
-                        continue
+                    self._action_manager.left_click(water_pos)
                     time.sleep(0.5)
 
         except Exception as e:
