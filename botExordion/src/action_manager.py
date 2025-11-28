@@ -43,7 +43,7 @@ class ActionManager:
             win32api.GetKeyState(left_mouse_down) < 0 or
             win32api.GetKeyState(right_mouse_down) < 0):
             time.sleep(0.005)
-            
+        
         client_pos = win32gui.ScreenToClient(self.hwnd, (pos[0], pos[1]))
         LongPositionToClick = win32api.MAKELONG(client_pos[0], client_pos[1])
         win32api.SendMessage(self.hwnd, win32con.WM_MOUSEMOVE, 0, LongPositionToClick)
