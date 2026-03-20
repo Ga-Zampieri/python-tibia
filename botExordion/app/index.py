@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import N, S, W, E, StringVar, ttk
 from .pescaAutomatica import Pesca
 from .macroRuna import Runa
+from .auto_clicker import AutoClicker
 import threading
 
 root = tk.Tk()
@@ -241,6 +242,85 @@ stop_btn = tk.Button(mainframe, text="Stop Fishing", command=stop_pesca, state=t
 stop_btn.grid(column=4, row=3, sticky=(W, E))
 reset_coordinates_btn = tk.Button(mainframe, text="Reset Fishing", command=reset_coordinates)
 reset_coordinates_btn.grid(column=5, row=3, sticky=(W, E))
+
+
+# Adicionando botões para capturar coordenadas e iniciar/parar o auto_clicker
+
+def capture_coordinates():
+    returnBox.delete("1.0", tk.END)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        count = int(coord_count.get()) if coord_count.get().isdigit() else 2
+        AutoClicker.getCoords(count=count)
+    out = buf.getvalue()
+
+    if not out:
+        out = "Nenhum resultado registrado.\n"
+    returnBox.insert("1.0", out)
+
+def start_auto_clicker():
+    if not AutoClicker.Coords:
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", "Necessário definir coordenadas antes de iniciar.\n")
+        return
+    AutoClicker.Clickar(True)
+    auto_clicker_start_btn.config(state=tk.DISABLED)
+    auto_clicker_stop_btn.config(state=tk.NORMAL)
+
+    # Monitora a thread interna do Pesca e reabilita botões quando terminar
+    def monitor(th):
+        if th:
+            th.join()  # espera o término da thread do bot
+        root.after(0, lambda: (auto_clicker_start_btn.config(state=tk.NORMAL), auto_clicker_stop_btn.config(state=tk.DISABLED)))
+
+    th = getattr(AutoClicker, "_thread", None)
+    if th:
+        threading.Thread(target=monitor, args=(th,), daemon=True).start()
+    else:
+        # fallback se não houver thread criada
+        auto_clicker_start_btn.config(state=tk.NORMAL)
+        auto_clicker_stop_btn.config(state=tk.DISABLED)
+    
+
+def stop_auto_clicker():
+    try:
+        AutoClicker.Clickar(False)
+    except Exception:
+        # se ocorrer erro ao sinalizar, habilita os botões de qualquer forma
+        auto_clicker_start_btn.config(state=tk.NORMAL),
+        auto_clicker_stop_btn.config(state=tk.DISABLED)
+        return
+    auto_clicker_start_btn.config(state=tk.NORMAL),
+    auto_clicker_stop_btn.config(state=tk.DISABLED)
+    # opcional: aguarda o worker encerrar em background e atualiza os botões quando terminar
+    def waiter(th):
+        th.join(timeout=10)
+        root.after(0, lambda: (auto_clicker_start_btn.config(state=tk.NORMAL), auto_clicker_stop_btn.config(state=tk.DISABLED)))
+    with _worker_lock:
+        th = worker_thread
+    if th:
+        threading.Thread(target=waiter, args=(th,), daemon=True).start()
+    else:
+        auto_clicker_start_btn.config(state=tk.NORMAL)
+        auto_clicker_stop_btn.config(state=tk.DISABLED)
+
+
+# Adicionando novos elementos à interface
+label_coord_count = tk.Label(mainframe, text="Qtd Coordenadas:")
+label_coord_count.grid(column=1, row=5, sticky=(W, E))
+coord_count = StringVar()
+coord_count_entry = tk.Entry(mainframe, width=5, textvariable=coord_count)
+coord_count_entry.grid(column=2, row=5, sticky=(W, E))
+
+capture_coords_btn = tk.Button(mainframe, text="Capture Coords", command=capture_coordinates)
+capture_coords_btn.grid(column=3, row=5, sticky=(W, E))
+
+auto_clicker_start_btn = tk.Button(mainframe, text="Start AutoClicker", command=start_auto_clicker)
+auto_clicker_start_btn.grid(column=4, row=5, sticky=(W, E))
+
+auto_clicker_stop_btn = tk.Button(mainframe, text="Stop AutoClicker", command=stop_auto_clicker, state=tk.DISABLED)
+auto_clicker_stop_btn.grid(column=5, row=5, sticky=(W, E))
 
 
 root.columnconfigure(0, weight=1)
