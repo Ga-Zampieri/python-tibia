@@ -86,6 +86,7 @@ class Runa:
     def Atacar(self, status: bool):
         if status:
             if self._thread and self._thread.is_alive():
+                self.status = Status.Active
                 return
 
             if self._kb_listener is None or not getattr(self._kb_listener, "is_alive", lambda: False)():
@@ -96,6 +97,7 @@ class Runa:
             self._stop_event.clear()
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
+            self.status = Status.Active
         else:
             self._stop_event.set()
             if self._kb_listener:
@@ -103,8 +105,9 @@ class Runa:
             self._kb_listener = None
 
             if self._thread and self._thread.is_alive():
-                self._thread.join()
+                self._thread.join(timeout=1)
             self._thread = None
+            self.status = Status.Inactive
 
     def _run(self):
         try:

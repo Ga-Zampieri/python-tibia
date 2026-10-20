@@ -1,0 +1,17 @@
+{
+  "name": "perfil_demo",
+  "dpi_scale": 1.0,
+  "screen_size": [1920, 1080],
+  "window_rect": [0, 0, 1920, 1080],
+  "hotkeys": {
+    "f1": "macro_demo"
+  },
+  "battle_list": {
+    "enabled": true,
+    "min_confidence": 0.75
+  },
+  "training": {
+    "profile": "slime_farm",
+    "weapon_order": ["main", "alternative"]
+  }
+}

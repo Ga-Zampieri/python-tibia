@@ -42,7 +42,6 @@ class Pesca:
                     self.logger.error("Action manager inválido")
                     return
 
-                # Configura listener
                 self._kb_listener = keyboard.Listener(on_press=self._on_key_press)
                 self._kb_listener.daemon = True
                 self._kb_listener.start()
@@ -52,14 +51,21 @@ class Pesca:
                 self._thread.start()
                 self.logger.info("Bot de pesca iniciado")
                 self.status = Status.Active
-            else:
-                self.logger.info("Parando bot")
-                self._stop_event.set()
-                if self._kb_listener:
-                    self._kb_listener.stop()
-                self.status = Status.Inactive
+                return True
+
+            self.logger.info("Parando bot")
+            self._stop_event.set()
+            if self._kb_listener:
+                self._kb_listener.stop()
+                self._kb_listener = None
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=1)
+            self._thread = None
+            self.status = Status.Inactive
+            return False
         except Exception as e:
             self.logger.error(f"Erro ao iniciar/parar bot: {e}")
+            return False
 
     def getFishingRod(self):
         def _on_click(x, y, button, pressed):
