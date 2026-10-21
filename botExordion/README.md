@@ -23,7 +23,9 @@ Aplicação desktop para automatização de Tibia 7.4 em Windows 10/11, com foco
 1. Crie um ambiente virtual: `python -m venv .venv`
 2. Ative o ambiente: `.venv\Scripts\activate`
 3. Instale dependências: `pip install -r requirements.txt`
-4. Execute a aplicação: `python app.py --demo`
+4. Instalar tesseract: `https://tesseractocr.org/pt/`
+5. Adicioná-lo ao path windows: `C:\Program Files\Tesseract-OCR\`
+6. Execute a aplicação: `executar.bat.lnk`, que basicamente roda run.bat como adm.
 
 ## Execução
 

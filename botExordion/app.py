@@ -6,7 +6,7 @@ import os
 import threading
 import time
 import tkinter as tk
-from tkinter import N, S, W, E, StringVar, ttk
+from tkinter import N, S, W, E, BooleanVar, StringVar, ttk
 
 try:
     from PIL import ImageGrab, ImageTk, Image, ImageOps
@@ -82,6 +82,7 @@ battle_last_scan_at = 0.0
 battle_scan_interval_seconds = 10.0
 battle_last_attack_at = 0.0
 battle_last_attack_key = None
+self_use_var = None
 
 # ----- Kill switch global (ESC) -----
 _global_esc_listener = None
@@ -424,6 +425,7 @@ def search_runa():
         returnBox.insert("1.0", "Informe uma hotkey antes de capturar a runa.\n")
         return
 
+    appController._rune.set_self_use(hotkey_name, self_use_var.get())
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         appController._rune.getRuna(key_name=hotkey_name)
@@ -434,6 +436,38 @@ def search_runa():
     returnBox.insert("1.0", out)
 
 
+def capture_player_position():
+    ok, message = _require_action_manager("capturar a posição do player")
+    if not ok:
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", f"{message}\n")
+        return
+    if not appController._rune:
+        appController._rune = _load_runa(appController._actionManager)
+    appController._rune.load_mappings(merge_existing=True)
+
+    returnBox.delete("1.0", tk.END)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        captured = appController._rune.getPlayerPosition()
+        if captured:
+            appController._rune.save_mappings()
+    out = buf.getvalue() or "Nenhum resultado registrado.\n"
+    returnBox.insert("1.0", out)
+
+
+def update_self_use_mode():
+    hotkey_name = normalize_hotkey(key.get())
+    if appController._rune and hotkey_name:
+        appController._rune.set_self_use(hotkey_name, self_use_var.get())
+
+
+def sync_self_use_mode(event=None):
+    hotkey_name = normalize_hotkey(key.get())
+    if appController._rune and hotkey_name:
+        self_use_var.set(appController._rune.is_self_use_enabled(hotkey_name))
+
+
 def load_runa():
     if not appController._rune:
         appController._rune = _load_runa(appController._actionManager)
@@ -441,6 +475,7 @@ def load_runa():
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         appController._rune.load_mappings()
+    sync_self_use_mode()
     out = buf.getvalue()
     if not out:
         out = "Nenhum resultado registrado.\n"
@@ -450,6 +485,7 @@ def load_runa():
 def save_runa():
     if not appController._rune:
         appController._rune = _load_runa(appController._actionManager)
+    appController._rune.set_self_use(normalize_hotkey(key.get()), self_use_var.get())
     returnBox.delete("1.0", tk.END)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -495,6 +531,7 @@ def start_macro_rune():
         return
     if not appController._rune:
         appController._rune = _load_runa(appController._actionManager)
+    appController._rune.set_self_use(normalize_hotkey(key.get()), self_use_var.get())
     appController._rune.Atacar(True)
     macro_rune_start_btn.config(state=tk.DISABLED)
     macro_rune_stop_btn.config(state=tk.NORMAL)
@@ -1029,7 +1066,7 @@ def select_battle_list_region():
 
 
 def build_ui():
-    global root, combo, returnBox, key, key_entry, sobrepor_btn
+    global root, combo, returnBox, key, key_entry, sobrepor_btn, self_use_var
     global macro_rune_start_btn, macro_rune_stop_btn
     global start_btn, stop_btn, busca_varinha_btn, busca_water_btn
 
@@ -1139,7 +1176,21 @@ def build_ui():
     start_macro_btn.grid(row=2, column=1, sticky="ew", padx=(2, 2), pady=(0, 3))
     stop_macro_btn = make_button(panel_macros, "Parar macro", stop_macro_rune, "danger")
     stop_macro_btn.grid(row=2, column=2, sticky="ew", padx=(2, 0), pady=(0, 3))
-    make_button(panel_macros, "Resetar runas", reset_runa).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(3, 0))
+    make_button(panel_macros, "Capturar player", capture_player_position).grid(row=3, column=0, sticky="ew", padx=(0, 2), pady=(3, 0))
+    self_use_var = BooleanVar(value=False)
+    tk.Checkbutton(
+        panel_macros,
+        text="Self use",
+        variable=self_use_var,
+        command=update_self_use_mode,
+        bg=PANEL,
+        fg=FG,
+        activebackground=PANEL,
+        activeforeground=FG,
+        selectcolor="#20252b",
+        font=("Segoe UI", 8, "bold"),
+    ).grid(row=3, column=1, columnspan=2, sticky="w", padx=4, pady=(3, 0))
+    make_button(panel_macros, "Resetar runas", reset_runa).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(3, 0))
 
     hotkey_frame = tk.Frame(root, bg=BG)
     hotkey_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(2, 3))
@@ -1147,7 +1198,7 @@ def build_ui():
     key = StringVar(value="F5")
     key_entry = tk.Entry(hotkey_frame, textvariable=key, width=8, bg="#20252b", fg=FG, insertbackground=FG, relief="flat", highlightthickness=1, highlightbackground=BORDER, highlightcolor="#82aaff", font=("Consolas", 8))
     key_entry.grid(row=0, column=1, sticky="w")
-    key_entry.bind("<KeyRelease>", lambda event: key.set(normalize_hotkey(key.get())))
+    key_entry.bind("<KeyRelease>", lambda event: (key.set(normalize_hotkey(key.get())), sync_self_use_mode()))
 
     root.bind_all("<Escape>", handle_escape)
     _install_global_esc_listener()
