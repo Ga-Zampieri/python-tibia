@@ -122,9 +122,9 @@ class SafeBattleListTargetSelector:
     def get_protected_index(self, snapshot: BattleListSnapshot) -> Optional[int]:
         if not snapshot.rows:
             return None
-        if len(snapshot.rows) <= 1:
-            return None
-        return max(0, len(snapshot.rows) - 1)
+        # A última linha é SEMPRE protegida — inclusive em snapshots com 1 alvo.
+        # Isso impede que o único monstro visível seja tratado como alvo elegível.
+        return len(snapshot.rows) - 1
 
     def is_candidate_eligible(self, snapshot: BattleListSnapshot, candidate_index: int) -> bool:
         if candidate_index < 0:
