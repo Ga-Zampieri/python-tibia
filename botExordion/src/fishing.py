@@ -5,6 +5,7 @@ import threading
 import time
 from .status import Status
 
+
 class Pesca:
     def __init__(self, action_manager):
         self._action_manager = action_manager
@@ -22,6 +23,7 @@ class Pesca:
             if key == keyboard.Key.esc:
                 self.logger.info("ESC pressionado — parando bot")
                 self._stop_event.set()
+                self.status = Status.Inactive
         except Exception as e:
             self.logger.error(f"Erro no handler de tecla: {e}")
 
@@ -55,13 +57,13 @@ class Pesca:
 
             self.logger.info("Parando bot")
             self._stop_event.set()
+            self.status = Status.Inactive
             if self._kb_listener:
                 self._kb_listener.stop()
                 self._kb_listener = None
             if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=1)
+                self._thread.join(timeout=2)
             self._thread = None
-            self.status = Status.Inactive
             return False
         except Exception as e:
             self.logger.error(f"Erro ao iniciar/parar bot: {e}")
@@ -76,12 +78,12 @@ class Pesca:
         try:
             print("Clique na varinha no inventário...")
             coords = {}
-            
+
             listener = mouse.Listener(on_click=_on_click)
             listener.start()
             listener.join(10)
             listener.stop()
-            
+
             if 'x' in coords:
                 self.varinha = (coords['x'], coords['y'])
                 print(f"Varinha configurada em: {self.varinha}")
@@ -111,7 +113,7 @@ class Pesca:
                 time.sleep(0.1)
 
             listener.stop()
-            
+
             if collected:
                 self.watersCoords.extend(collected)
                 print(f"Total de águas: {len(self.watersCoords)}")
@@ -120,32 +122,52 @@ class Pesca:
             print(f"Erro ao localizar águas: {e}")
             return False
 
+    def _sleep_interruptible(self, seconds: float) -> bool:
+        """Dorme em pequenos intervalos para reagir rápido ao ESC.
+        Retorna False se o stop_event foi acionado durante a espera."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self._stop_event.is_set():
+                return False
+            time.sleep(0.05)
+        return True
+
     def _run(self):
         try:
             self.logger.info("Iniciando ciclo de pesca...")
             while not self._stop_event.is_set():
-                
+
                 for i, water in enumerate(self.watersCoords):
                     if self._stop_event.is_set():
                         break
-                    
+
                     randX = random.randint(-10, 10)
                     randY = random.randint(-10, 10)
                     varinha_pos = (self.varinha[0] + randX, self.varinha[1] + randY)
                     water_pos = (water[0] + randX, water[1] + randY)
 
-                    self._action_manager.move_mouse(varinha_pos)  # mover mouse para fora da tela
+                    if self._stop_event.is_set():
+                        break
+                    self._action_manager.move_mouse(varinha_pos)
                     if not self._action_manager.right_click(varinha_pos):
                         continue
-                    time.sleep(0.5)
-                    self._action_manager.move_mouse(water_pos)  # mover mouse para fora da tela
+
+                    if not self._sleep_interruptible(0.5):
+                        break
+
+                    if self._stop_event.is_set():
+                        break
+                    self._action_manager.move_mouse(water_pos)
                     if not self._action_manager.left_click(water_pos):
                         continue
-                    time.sleep(0.5)
+
+                    if not self._sleep_interruptible(0.5):
+                        break
 
         except Exception as e:
             self.logger.error(f"Erro fatal: {e}")
         finally:
+            self.status = Status.Inactive
             self.logger.info("Bot parado")
 
     def resetCoordinates(self):

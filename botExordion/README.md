@@ -25,7 +25,7 @@ Aplicação desktop para automatização de Tibia 7.4 em Windows 10/11, com foco
 3. Instale dependências: `pip install -r requirements.txt`
 4. Instalar tesseract: `https://tesseractocr.org/pt/`
 5. Adicioná-lo ao path windows: `C:\Program Files\Tesseract-OCR\`
-6. Execute a aplicação: `executar.bat.lnk`, que basicamente roda run.bat como adm.
+6. Execute a aplicação: `app.bat`, que basicamente roda run.bat como adm.
 
 ## Execução
 

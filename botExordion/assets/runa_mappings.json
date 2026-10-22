@@ -1,10 +1,29 @@
 {
-  "g": [
-    1772,
-    539
+  "player_position": [
+    874,
+    455
   ],
-  "t": [
-    1846,
-    537
-  ]
+  "mappings": {
+    "g": {
+      "rune": [
+        1772,
+        539
+      ],
+      "self_use": false
+    },
+    "t": {
+      "rune": [
+        1846,
+        537
+      ],
+      "self_use": false
+    },
+    "r": {
+      "rune": [
+        1809,
+        637
+      ],
+      "self_use": true
+    }
+  }
 }

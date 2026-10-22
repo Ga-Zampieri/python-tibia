@@ -31,7 +31,6 @@ from src.battle_list_selector import (
 )
 from src.training import TrainingStateMachine
 
-# Silencia os avisos de debug do Tesseract
 logging.getLogger('pytesseract').setLevel(logging.CRITICAL)
 
 
@@ -84,10 +83,28 @@ battle_last_attack_at = 0.0
 battle_last_attack_key = None
 self_use_var = None
 
+
+# ----- Cores dos botões (verde forte/opaco, vermelho forte/opaco) -----
+COLOR_GREEN_STRONG = "#4fbf8b"
+COLOR_GREEN_STRONG_ACTIVE = "#5fd3a0"
+COLOR_GREEN_OPAQUE = "#3a4a44"
+COLOR_GREEN_OPAQUE_FG = "#8f9a94"
+
+COLOR_RED_STRONG = "#d99292"
+COLOR_RED_STRONG_ACTIVE = "#8a444a"
+COLOR_RED_OPAQUE = "#4a3a3a"
+COLOR_RED_OPAQUE_FG = "#9a8f8f"
+
+
 # ----- Kill switch global (ESC) -----
 _global_esc_listener = None
 _global_esc_lock = threading.Lock()
 _escape_in_progress = threading.Event()
+
+
+# ----- Hotkey global Shift+F1 (iniciar macro de runa) -----
+_global_macro_hotkey_listener = None
+_global_macro_hotkey_lock = threading.Lock()
 
 
 def _install_global_esc_listener() -> bool:
@@ -134,6 +151,66 @@ def _uninstall_global_esc_listener() -> None:
         print("[esc-global] hotkey ESC global removido.")
 
 
+def _install_global_macro_hotkey_listener() -> bool:
+    global _global_macro_hotkey_listener
+    with _global_macro_hotkey_lock:
+        if _global_macro_hotkey_listener is not None:
+            return True
+        try:
+            from pynput import keyboard
+        except Exception as exc:
+            print(f"[macro-hotkey] pynput indisponível: {exc}")
+            return False
+
+        def _trigger_start_macro():
+            if globals().get("root") is not None:
+                root.after(0, _safe_start_macro_rune_from_hotkey)
+            else:
+                _safe_start_macro_rune_from_hotkey()
+
+        try:
+            hotkeys = keyboard.GlobalHotKeys({
+                '<shift>+<f1>': _trigger_start_macro,
+            })
+            hotkeys.daemon = True
+            hotkeys.start()
+            _global_macro_hotkey_listener = hotkeys
+            print("[macro-hotkey] Shift+F1 global instalado.")
+            return True
+        except Exception as exc:
+            print(f"[macro-hotkey] erro ao instalar Shift+F1: {exc}")
+            return False
+
+
+def _uninstall_global_macro_hotkey_listener() -> None:
+    global _global_macro_hotkey_listener
+    with _global_macro_hotkey_lock:
+        if _global_macro_hotkey_listener is None:
+            return
+        try:
+            _global_macro_hotkey_listener.stop()
+        except Exception:
+            pass
+        finally:
+            _global_macro_hotkey_listener = None
+        print("[macro-hotkey] Shift+F1 global removido.")
+
+
+def _safe_start_macro_rune_from_hotkey():
+    try:
+        ok, message = _require_action_manager("iniciar a macro")
+        if not ok:
+            if "returnBox" in globals() and returnBox is not None:
+                returnBox.delete("1.0", tk.END)
+                returnBox.insert("1.0", f"[Shift+F1] {message}\n")
+            return
+        start_macro_rune()
+        if "returnBox" in globals() and returnBox is not None:
+            returnBox.insert("1.0", "[Shift+F1] macro de runa iniciada.\n")
+    except Exception as exc:
+        print(f"[macro-hotkey] erro ao iniciar macro: {exc}")
+
+
 def normalize_hotkey(value):
     return str(value or "").strip().lower()
 
@@ -144,8 +221,11 @@ def sobrepor_todas_janelas():
     try:
         if globals().get('root') is not None:
             root.attributes('-topmost', sobrepor_janela)
-        if sobrepor_btn:
-            sobrepor_btn.config(text="Sobrepor: ON" if sobrepor_janela else "Sobrepor: OFF", bg="#8bd5b5" if sobrepor_janela else "#414954")
+        if globals().get("sobrepor_btn") is not None:
+            sobrepor_btn.config(
+                text="Sobrepor: ON" if sobrepor_janela else "Sobrepor: OFF",
+                bg="#8bd5b5" if sobrepor_janela else "#414954",
+            )
     except Exception:
         pass
 
@@ -162,18 +242,178 @@ def handle_escape(event=None):
         if appController._rune is not None:
             try: appController._rune.Atacar(False)
             except Exception as exc: print(f"[esc-global] erro runa: {exc}")
+        # Só pausa o treino se houver algo efetivamente rodando.
         if appController._training is not None:
-            appController._training.pause()
+            try:
+                current = appController._training.state.value
+                if current not in ("INATIVO", "PAUSADO"):
+                    appController._training.pause()
+            except Exception as exc:
+                print(f"[esc-global] erro treino: {exc}")
 
-        if "start_btn" in globals() and start_btn is not None: start_btn.config(state=tk.NORMAL)
-        if "stop_btn" in globals() and stop_btn is not None: stop_btn.config(state=tk.DISABLED)
-        if "macro_rune_start_btn" in globals() and macro_rune_start_btn is not None: macro_rune_start_btn.config(state=tk.NORMAL)
-        if "macro_rune_stop_btn" in globals() and macro_rune_stop_btn is not None: macro_rune_stop_btn.config(state=tk.DISABLED)
-        if "returnBox" in globals() and returnBox is not None: returnBox.insert("1.0", "ESC pressionado (global): bots parados.\n")
+        _refresh_training_buttons()
+        _refresh_fishing_buttons()
+        _refresh_macro_buttons()
+        if "returnBox" in globals() and returnBox is not None:
+            returnBox.insert("1.0", "ESC pressionado (global): bots parados.\n")
     finally:
         _escape_in_progress.clear()
     return "break"
 
+
+# ----- Helpers de estado para os botões -----
+
+def _training_is_busy() -> bool:
+    if appController._training is None:
+        return False
+    try:
+        state = appController._training.state.value
+    except Exception:
+        return False
+    return state not in ("INATIVO", "PAUSADO", "ERRO")
+
+
+def _training_can_stop() -> bool:
+    if battle_monitor_active:
+        return True
+    if appController._training is None:
+        return False
+    try:
+        # Só há o que parar se o treino está efetivamente rodando.
+        return appController._training.state.value not in ("INATIVO", "PAUSADO", "ERRO")
+    except Exception:
+        return False
+
+
+def _can_start_training() -> bool:
+    am = appController._actionManager
+    if am is None or not am.is_valid():
+        return False
+    if battle_list_region is None:
+        return False
+    try:
+        if not battle_list_validator.is_valid(battle_list_region):
+            return False
+    except Exception:
+        return False
+    if _training_is_busy():
+        return False
+    return True
+
+
+def _fishing_is_active() -> bool:
+    fishing = appController._fishing
+    if fishing is None:
+        return False
+    try:
+        from src.status import Status
+        return fishing.status == Status.Active
+    except Exception:
+        return False
+
+
+def _can_start_fishing() -> bool:
+    am = appController._actionManager
+    if am is None or not am.is_valid():
+        return False
+    fishing = appController._fishing
+    if fishing is None:
+        return False
+    if getattr(fishing, "varinha", None) is None:
+        return False
+    if not getattr(fishing, "watersCoords", None):
+        return False
+    if _fishing_is_active():
+        return False
+    return True
+
+
+def _macro_is_active() -> bool:
+    rune = appController._rune
+    if rune is None:
+        return False
+    try:
+        from src.status import Status
+        return rune.status == Status.Active
+    except Exception:
+        return False
+
+
+def _can_start_macro() -> bool:
+    am = appController._actionManager
+    if am is None or not am.is_valid():
+        return False
+    if _macro_is_active():
+        return False
+    return True
+
+
+def _apply_green(button, enabled: bool):
+    try:
+        if enabled:
+            button.config(
+                state=tk.NORMAL,
+                bg=COLOR_GREEN_STRONG,
+                activebackground=COLOR_GREEN_STRONG_ACTIVE,
+                disabledforeground=COLOR_GREEN_OPAQUE_FG,
+                cursor="hand2",
+            )
+        else:
+            button.config(
+                state=tk.DISABLED,
+                bg=COLOR_GREEN_OPAQUE,
+                activebackground=COLOR_GREEN_OPAQUE,
+                disabledforeground=COLOR_GREEN_OPAQUE_FG,
+                cursor="arrow",
+            )
+    except Exception:
+        pass
+
+
+def _apply_red(button, enabled: bool):
+    try:
+        if enabled:
+            button.config(
+                state=tk.NORMAL,
+                bg=COLOR_RED_STRONG,
+                activebackground=COLOR_RED_STRONG_ACTIVE,
+                disabledforeground=COLOR_RED_OPAQUE_FG,
+                cursor="hand2",
+            )
+        else:
+            button.config(
+                state=tk.DISABLED,
+                bg=COLOR_RED_OPAQUE,
+                activebackground=COLOR_RED_OPAQUE,
+                disabledforeground=COLOR_RED_OPAQUE_FG,
+                cursor="arrow",
+            )
+    except Exception:
+        pass
+
+
+def _refresh_training_buttons():
+    if globals().get("start_training_btn") is not None:
+        _apply_green(start_training_btn, _can_start_training())
+    if globals().get("stop_training_btn") is not None:
+        _apply_red(stop_training_btn, _training_can_stop())
+
+
+def _refresh_fishing_buttons():
+    if globals().get("start_fishing_btn") is not None:
+        _apply_green(start_fishing_btn, _can_start_fishing())
+    if globals().get("stop_fishing_btn") is not None:
+        _apply_red(stop_fishing_btn, _fishing_is_active())
+
+
+def _refresh_macro_buttons():
+    if globals().get("start_macro_btn") is not None:
+        _apply_green(start_macro_btn, _can_start_macro())
+    if globals().get("stop_macro_btn") is not None:
+        _apply_red(stop_macro_btn, _macro_is_active())
+
+
+# ----- Resto do código -----
 
 def _resolve_tesseract_path():
     candidates = [
@@ -208,40 +448,31 @@ def _extract_battle_creature_names(region):
         image = ImageGrab.grab(bbox=region.as_tuple()).convert("L")
         crop_top = min(25, image.height // 3)
         image = image.crop((0, crop_top, image.width, image.height))
-        
         image = image.point(lambda p: 255 if p > 60 else 0)
         if ImageOps:
             image = ImageOps.invert(image)
-            
         image = image.resize((image.width * 4, image.height * 4), Image.Resampling.LANCZOS)
-        
         text = pytesseract.image_to_string(image, config="--psm 6 --oem 3")
     except Exception:
         return ()
 
     names = []
     ignore_words = {"battle", "battle list", "monitor", "target", "targets", "screen", "age", "asc", "ex", "cap", "luck", "exp", "hp", "mp", "mana", "soul", "options", "logout", "world", "chat"}
-
     for raw_line in text.splitlines():
         line = " ".join(raw_line.strip().split())
         if not line:
             continue
-        
         parts = line.split()
         if len(parts) > 1 and len(parts[0]) == 1:
             line = " ".join(parts[1:])
-
         lowered = line.lower()
-        
         if lowered in ignore_words or any(ign in lowered for ign in ["screen", "asc", "cap", "luck", "ex ", "age"]):
             continue
         if any(ch.isdigit() for ch in line):
             continue
         if len(line) < 2 or len(line) > 40:
             continue
-            
         names.append(line)
-            
     return tuple(names)
 
 
@@ -258,13 +489,11 @@ def _get_battle_region_signature(region):
 def tick_training_attack():
     if appController._training is None or battle_list_region is None:
         return False
-
     for _ in range(3):
         if should_attack_first_target_if_available(battle_list_region):
             ok, _ = execute_first_battle_target_attack()
             return bool(ok)
         time.sleep(0.05)
-
     return False
 
 
@@ -280,12 +509,10 @@ def _log_battle_change(region):
     names = _extract_battle_creature_names(region)
     if not names:
         names = battle_last_detected_names
-
     if names:
         print(f"[battle-monitor] criaturas na área: {', '.join(names)}")
         battle_last_detected_names = names
         return
-
     selected = has_selected_target_in_region(region)
     snapshot = build_battle_snapshot_from_region(region)
     visible_count = len(snapshot.rows) if snapshot is not None else 0
@@ -295,32 +522,26 @@ def _log_battle_change(region):
 
 def monitor_battle_region():
     global battle_monitor_active, battle_monitor_job, battle_last_region_signature, battle_last_change_log_at, battle_last_scan_at
-
     if not battle_monitor_active or battle_list_region is None or appController._training is None:
         battle_monitor_active = False
         return
-
     now = time.monotonic()
     if battle_last_scan_at and (now - battle_last_scan_at) < battle_scan_interval_seconds:
         if globals().get("root") is not None and battle_monitor_active:
             battle_monitor_job = root.after(int(battle_scan_interval_seconds * 1000), monitor_battle_region)
         return
-
     battle_last_scan_at = now
     entities = _get_battle_entities(battle_list_region)
     count = len(entities)
     selected = has_selected_target_in_region(battle_list_region)
-    
     if count > 1 and selected:
         print(f"[battle-monitor] tem {count} bichos, atacando.")
     elif count > 0:
         names = _extract_battle_creature_names(battle_list_region)
         target_name = names[0] if names else "desconhecido"
         print(f"[battle-monitor] tem {count} bichos, novo target = {target_name}")
-
     if tick_training_attack():
         print("[battle-monitor] ataque executado durante o monitoramento da battle.")
-
     if globals().get("root") is not None and battle_monitor_active:
         battle_monitor_job = root.after(int(battle_scan_interval_seconds * 1000), monitor_battle_region)
 
@@ -339,6 +560,7 @@ def start_battle_monitor():
         battle_monitor_job = root.after(int(battle_scan_interval_seconds * 1000), monitor_battle_region)
     else:
         print("[battle-monitor] monitor da battle iniciado.")
+    _refresh_training_buttons()
 
 
 def stop_battle_monitor():
@@ -350,13 +572,13 @@ def stop_battle_monitor():
     battle_last_change_log_at = 0.0
     battle_last_scan_at = 0.0
     print("[battle-monitor] monitor da battle parado.")
+    _refresh_training_buttons()
 
 
 def get_windows():
     global windows
     from src.window_handler import getWindows
     returnBox.delete("1.0", tk.END)
-
     try:
         windows = getWindows(None)
         window_titles = [f"{title} ({hwnd})" for title, hwnd in windows] if windows else []
@@ -377,7 +599,6 @@ def select_window():
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Please select a window first.\n")
         return
-
     try:
         hwnd = int(selected.split('(')[-1].strip(')'))
         title = selected.rsplit(' (', 1)[0]
@@ -396,12 +617,18 @@ def select_window():
                 start_btn.configure(state=tk.DISABLED)
                 busca_varinha_btn.configure(state=tk.DISABLED)
                 busca_water_btn.configure(state=tk.DISABLED)
+                _refresh_training_buttons()
+                _refresh_fishing_buttons()
+                _refresh_macro_buttons()
                 return
             returnBox.delete("1.0", tk.END)
             returnBox.insert("1.0", f"Selected window: {title}\nHWND: {hwnd}\n")
             start_btn.configure(state=tk.NORMAL)
             busca_varinha_btn.configure(state=tk.NORMAL)
             busca_water_btn.configure(state=tk.NORMAL)
+            _refresh_training_buttons()
+            _refresh_fishing_buttons()
+            _refresh_macro_buttons()
         else:
             returnBox.delete("1.0", tk.END)
             returnBox.insert("1.0", "Selected window not found in list.\n")
@@ -419,12 +646,10 @@ def search_runa():
     if not appController._rune:
         appController._rune = _load_runa(appController._actionManager)
     returnBox.delete("1.0", tk.END)
-
     hotkey_name = normalize_hotkey(key.get())
     if not hotkey_name:
         returnBox.insert("1.0", "Informe uma hotkey antes de capturar a runa.\n")
         return
-
     appController._rune.set_self_use(hotkey_name, self_use_var.get())
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -445,7 +670,6 @@ def capture_player_position():
     if not appController._rune:
         appController._rune = _load_runa(appController._actionManager)
     appController._rune.load_mappings(merge_existing=True)
-
     returnBox.delete("1.0", tk.END)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -533,8 +757,8 @@ def start_macro_rune():
         appController._rune = _load_runa(appController._actionManager)
     appController._rune.set_self_use(normalize_hotkey(key.get()), self_use_var.get())
     appController._rune.Atacar(True)
-    macro_rune_start_btn.config(state=tk.DISABLED)
-    macro_rune_stop_btn.config(state=tk.NORMAL)
+    _refresh_macro_buttons()
+    _refresh_training_buttons()
 
 
 def stop_macro_rune():
@@ -543,12 +767,11 @@ def stop_macro_rune():
     try:
         appController._rune.Atacar(False)
     except Exception:
-        macro_rune_start_btn.config(state=tk.NORMAL)
-        macro_rune_stop_btn.config(state=tk.DISABLED)
+        _refresh_macro_buttons()
+        _refresh_training_buttons()
         return
-
-    macro_rune_start_btn.config(state=tk.NORMAL)
-    macro_rune_stop_btn.config(state=tk.DISABLED)
+    _refresh_macro_buttons()
+    _refresh_training_buttons()
 
 
 def reset_coordinates():
@@ -567,6 +790,7 @@ def reset_coordinates():
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
+    _refresh_fishing_buttons()
 
 
 def search_varinha():
@@ -585,6 +809,7 @@ def search_varinha():
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
+    _refresh_fishing_buttons()
 
 
 def search_aguas():
@@ -603,6 +828,7 @@ def search_aguas():
     if not out:
         out = "Nenhum resultado registrado.\n"
     returnBox.insert("1.0", out)
+    _refresh_fishing_buttons()
 
 
 def start_pesca():
@@ -621,10 +847,9 @@ def start_pesca():
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Necessário definir ao menos uma água antes de iniciar.\n")
         return
-
-    started = appController._fishing.Pescar()
-    start_btn.config(state=tk.DISABLED if started else tk.NORMAL)
-    stop_btn.config(state=tk.NORMAL if started else tk.DISABLED)
+    appController._fishing.Pescar()
+    _refresh_fishing_buttons()
+    _refresh_training_buttons()
 
 
 def stop_pesca():
@@ -632,100 +857,52 @@ def stop_pesca():
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Bot de pesca não está inicializado.\n")
         return
-
     appController._fishing.Pescar()
-    start_btn.config(state=tk.NORMAL)
-    stop_btn.config(state=tk.DISABLED)
     returnBox.delete("1.0", tk.END)
     returnBox.insert("1.0", "Pesca parada.\n")
-
+    _refresh_fishing_buttons()
+    _refresh_training_buttons()
 
 
 def _get_battle_entities(region):
-    """
-    Detecta as linhas de criaturas na Battle List por suas barras de vida.
-
-    Melhorias:
-    - Detecta tons variados de verde e vermelho.
-    - Usa a extensão horizontal da barra, não apenas a soma de pixels.
-    - Agrupa pixels próximos verticalmente.
-    - Evita juntar duas barras que estejam em linhas diferentes.
-    - Retorna uma bounding box para cada criatura detectada.
-    """
     if ImageGrab is None or region is None or np is None:
         return []
-
     try:
         image = ImageGrab.grab(bbox=region.as_tuple()).convert("RGB")
         arr = np.asarray(image, dtype=np.uint8)
     except Exception as exc:
         print(f"[battle-detect] erro na captura: {exc}")
         return []
-
     height, width = arr.shape[:2]
-
     if height < 5 or width < 10:
         return []
-
-    # Remove o cabeçalho da Battle List.
     start_y = min(25, height // 4)
     play_area = arr[start_y:, :, :]
-
     if play_area.size == 0:
         return []
-
     R = play_area[:, :, 0].astype(np.int16)
     G = play_area[:, :, 1].astype(np.int16)
     B = play_area[:, :, 2].astype(np.int16)
-
-    # Barras verdes: aceita diferentes tons de verde.
-    green_bar = (
-        (G >= 65)
-        & (G > R * 1.20)
-        & (G > B * 1.15)
-        & (R < 155)
-        & (B < 155)
-    )
-
-    # Barras vermelhas: inclui a barra de um alvo selecionado.
-    red_bar = (
-        (R >= 100)
-        & (R > G * 1.25)
-        & (R > B * 1.20)
-        & (G < 155)
-    )
-
+    green_bar = ((G >= 65) & (G > R * 1.20) & (G > B * 1.15) & (R < 155) & (B < 155))
+    red_bar = ((R >= 100) & (R > G * 1.25) & (R > B * 1.20) & (G < 155))
     bar_mask = green_bar | red_bar
-
-    # Exige uma quantidade mínima de pixels coloridos por linha.
     min_pixels = max(8, int(width * 0.04))
     min_span = max(12, int(width * 0.06))
-
     active_rows = []
-
     for y in range(bar_mask.shape[0]):
         xs = np.flatnonzero(bar_mask[y])
-
         if len(xs) < min_pixels:
             continue
-
-        # Uma barra precisa ocupar uma extensão horizontal razoável.
         if int(xs[-1]) - int(xs[0]) + 1 < min_span:
             continue
-
         active_rows.append(y)
-
     if not active_rows:
         print("[battle-detect] nenhuma barra de vida detectada.")
         return []
-
-    # Agrupa as linhas pertencentes à mesma barra.
-    # Pequenos intervalos entre pixels são tolerados.
     max_vertical_gap = 3
     blocks = []
     current_top = active_rows[0]
     current_bottom = active_rows[0]
-
     for y in active_rows[1:]:
         if y - current_bottom <= max_vertical_gap + 1:
             current_bottom = y
@@ -733,60 +910,27 @@ def _get_battle_entities(region):
             blocks.append((current_top, current_bottom))
             current_top = y
             current_bottom = y
-
     blocks.append((current_top, current_bottom))
-
-    # Converte os blocos detectados em regiões clicáveis.
     bounds = []
-
     for top, bottom in blocks:
         bar_height = bottom - top + 1
-
-        # Descarta ruídos de apenas um pixel.
         if bar_height < 2:
             continue
-
-        # A barra de vida fica abaixo do nome da criatura.
         row_top = region.top + start_y + top - 13
         row_bottom = region.top + start_y + bottom + 3
-
-        # Mantém os limites dentro da região selecionada.
         row_top = max(region.top, row_top)
         row_bottom = min(region.bottom, row_bottom)
-
         if row_bottom <= row_top:
             continue
-
-        bounds.append(
-            (
-                region.left,
-                row_top,
-                region.right,
-                row_bottom,
-            )
-        )
-
-    # Ordena as criaturas de cima para baixo.
+        bounds.append((region.left, row_top, region.right, row_bottom))
     bounds.sort(key=lambda item: item[1])
-
-    # Remove caixas verticais praticamente duplicadas.
     unique_bounds = []
-
     for item in bounds:
         center_y = (item[1] + item[3]) // 2
-
-        duplicate = any(
-            abs(center_y - ((old[1] + old[3]) // 2)) <= 4
-            for old in unique_bounds
-        )
-
+        duplicate = any(abs(center_y - ((old[1] + old[3]) // 2)) <= 4 for old in unique_bounds)
         if not duplicate:
             unique_bounds.append(item)
-
-    print(
-        f"[battle-detect] barras detectadas: {len(unique_bounds)}"
-    )
-
+    print(f"[battle-detect] barras detectadas: {len(unique_bounds)}")
     return unique_bounds[:20]
 
 
@@ -798,40 +942,18 @@ def _count_real_battle_targets(region):
 def build_battle_snapshot_from_region(region):
     if region is None:
         return None
-
     bounds_list = _get_battle_entities(region)
-    
     if not bounds_list:
-        return BattleListSnapshot(
-            rows=(),
-            state=SelectorState.UNCERTAIN,
-            complete=False,
-            captured_at=time.time(),
-        )
-
+        return BattleListSnapshot(rows=(), state=SelectorState.UNCERTAIN, complete=False, captured_at=time.time())
     rows = []
-    # Limita a 5 alvos por segurança, mas suporta quantos aparecerem na tela
     for index, (l, t, r, b) in enumerate(bounds_list[:5]):
-        rows.append(
-            BattleListRow(
-                index=index,
-                bounds=(l, t, r, b),
-                confidence=0.98,
-            )
-        )
-
-    return BattleListSnapshot(
-        rows=tuple(rows),
-        state=SelectorState.VALID,
-        complete=True,
-        captured_at=time.time(),
-    )
+        rows.append(BattleListRow(index=index, bounds=(l, t, r, b), confidence=0.98))
+    return BattleListSnapshot(rows=tuple(rows), state=SelectorState.VALID, complete=True, captured_at=time.time())
 
 
 def get_first_battle_target_position(region, snapshot):
     if region is None or snapshot is None or not snapshot.rows:
         return None
-    # Pega a posição central do PRIMEIRO alvo detectado
     row = snapshot.rows[0]
     l, t, r, b = row.bounds
     x = (l + r) // 2
@@ -842,23 +964,19 @@ def get_first_battle_target_position(region, snapshot):
 def has_selected_target_in_region(region):
     if ImageGrab is None or region is None:
         return False
-
     try:
         image = ImageGrab.grab(bbox=region.as_tuple())
         rgb = image.convert("RGB")
         width, height = rgb.size
         red_pixel_count = 0
         total_pixels = width * height
-
         for y in range(height):
             for x in range(width):
                 r, g, b = rgb.getpixel((x, y))
                 if r > 160 and g < 120 and b < 120:
                     red_pixel_count += 1
-
         if total_pixels == 0:
             return False
-
         return (red_pixel_count / total_pixels) > 0.002
     except Exception:
         return False
@@ -870,25 +988,19 @@ def should_attack_first_target_if_available(region):
         return False
     if has_selected_target_in_region(region):
         return False
-
     snapshot = build_battle_snapshot_from_region(region)
     if snapshot is None or not snapshot.complete:
         return False
-
-    # REGRA ESTRITA: precisa de 2+ linhas para atacar.
     if len(snapshot.rows) <= 1:
         return False
-
     selector = SafeBattleListTargetSelector(min_confidence=0.8, required_stable_captures=1)
     eligible = selector.get_eligible_targets(snapshot)
     if not eligible:
         return False
-
     current_key = tuple((row.index, row.bounds) for row in snapshot.rows[:3])
     now = time.monotonic()
     if current_key == battle_last_attack_key and (now - battle_last_attack_at) < 1.2:
         return False
-
     return True
 
 
@@ -898,27 +1010,20 @@ def execute_first_battle_target_attack():
         return False, "Selecione uma janela antes de atacar o battle."
     if battle_list_region is None:
         return False, "Selecione a região da battle list antes de atacar."
-
     if not should_attack_first_target_if_available(battle_list_region):
         return False, "Sem alvo disponível: é preciso mais de um alvo visível e sem seleção."
-
-    # Re-validação imediata
     snapshot = build_battle_snapshot_from_region(battle_list_region)
     if snapshot is None or not snapshot.complete or len(snapshot.rows) <= 1:
         return False, "Apenas um alvo visível no momento do clique — ataque cancelado."
-
     selector = SafeBattleListTargetSelector(min_confidence=0.8, required_stable_captures=1)
     eligible = selector.get_eligible_targets(snapshot)
     if len(eligible) < 1:
         return False, "Battle list sem alvos elegíveis para ataque seguro."
-
     target = get_first_battle_target_position(battle_list_region, snapshot)
     if target is None:
         return False, "Não foi possível localizar o alvo do battle."
-
     battle_last_attack_at = time.monotonic()
     battle_last_attack_key = tuple((row.index, row.bounds) for row in snapshot.rows[:3])
-
     appController._actionManager.focusWindow()
     appController._actionManager.move_mouse(target)
     appController._actionManager.left_click(target)
@@ -928,22 +1033,20 @@ def execute_first_battle_target_attack():
 def start_treino():
     if not appController._training:
         appController._training = TrainingStateMachine()
-
     appController._training.start()
     start_battle_monitor()
-
     snapshot = build_battle_snapshot_from_region(battle_list_region)
     if snapshot is None:
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Treinamento aguardando região da battle list.\n")
+        _refresh_training_buttons()
         return
-
     if len(snapshot.rows) < 2:
         decision = appController._training.evaluate_battle_list(snapshot)
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", f"Treinamento aguardando região válida.\nEstado: {appController._training.state.value}\nMotivo: {decision.reason}\n")
+        _refresh_training_buttons()
         return
-
     if appController._training.selector.validate_snapshot(snapshot):
         appController._training.train()
         next_target = appController._training.get_next_target(snapshot)
@@ -959,20 +1062,27 @@ def start_treino():
             f"Ação: {'ok' if ok else 'bloqueada'}\nDetalhe: {message}\n"
             "Regra: só ataca o primeiro alvo quando há pelo menos mais um target na battle.\n"
         )
+        _refresh_training_buttons()
         return
-
     decision = appController._training.evaluate_battle_list(snapshot)
     returnBox.delete("1.0", tk.END)
     returnBox.insert("1.0", f"Treinamento aguardando estabilidade.\nEstado: {appController._training.state.value}\nMotivo: {decision.reason}\n")
+    _refresh_training_buttons()
 
 
 def stop_treino():
     if not appController._training:
         appController._training = TrainingStateMachine()
     stop_battle_monitor()
-    appController._training.pause()
+    try:
+        current = appController._training.state.value
+        if current not in ("INATIVO", "PAUSADO"):
+            appController._training.pause()
+    except Exception:
+        pass
     returnBox.delete("1.0", tk.END)
     returnBox.insert("1.0", f"Treinamento pausado.\nEstado: {appController._training.state.value}\n")
+    _refresh_training_buttons()
 
 
 def configure_battle_list_region(region):
@@ -988,6 +1098,7 @@ def configure_battle_list_region(region):
     else:
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Região inválida. Ajuste a seleção da Battle List.\n")
+    _refresh_training_buttons()
 
 
 def preview_battle_list_capture():
@@ -998,7 +1109,6 @@ def preview_battle_list_capture():
     if battle_list_region is None or not battle_list_validator.is_valid(battle_list_region):
         returnBox.insert("1.0", "Selecione primeiro uma região válida da Battle List.\n")
         return
-
     preview = tk.Toplevel(root)
     preview.title("Prévia da Battle List")
     preview.attributes("-topmost", True)
@@ -1015,7 +1125,6 @@ def select_battle_list_region():
     if ImageGrab is None or ImageTk is None:
         returnBox.insert("1.0", "Captura de tela indisponível neste ambiente.\n")
         return
-
     screen = ImageGrab.grab()
     full_width, full_height = screen.size
     overlay = tk.Toplevel(root)
@@ -1023,7 +1132,6 @@ def select_battle_list_region():
     overlay.geometry(f"{full_width}x{full_height}+0+0")
     overlay.overrideredirect(True)
     overlay.wm_attributes("-alpha", 0.28)
-
     canvas = tk.Canvas(overlay, width=full_width, height=full_height, cursor="crosshair", bg="black", highlightthickness=0)
     canvas.pack(fill="both", expand=True)
     photo = ImageTk.PhotoImage(screen)
@@ -1049,7 +1157,6 @@ def select_battle_list_region():
         if start_x is None or start_y is None:
             overlay.destroy()
             return
-
         left = min(start_x, event.x)
         top = min(start_y, event.y)
         width = abs(event.x - start_x)
@@ -1065,10 +1172,85 @@ def select_battle_list_region():
     overlay.focus_force()
 
 
+class _Tooltip:
+    def __init__(self, widget, text: str, delay_ms: int = 350):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self._after_id = None
+        self._tip_window = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _cancel(self):
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        if self._tip_window is not None:
+            return
+        try:
+            x = self.widget.winfo_rootx() + self.widget.winfo_width() + 6
+            y = self.widget.winfo_rooty() + 2
+            tip = tk.Toplevel(self.widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry(f"+{x}+{y}")
+            tip.attributes("-topmost", True)
+            frame = tk.Frame(tip, bg="#20252b", highlightthickness=1, highlightbackground="#454d58")
+            frame.pack()
+            tk.Label(frame, text=self.text, bg="#20252b", fg="#eef2f7", font=("Segoe UI", 8), justify="left", padx=8, pady=6, wraplength=260).pack()
+            self._tip_window = tip
+        except Exception:
+            self._tip_window = None
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self._tip_window is not None:
+            try:
+                self._tip_window.destroy()
+            except Exception:
+                pass
+            self._tip_window = None
+
+
+def _make_stateful_button(parent, text, command):
+    """Botão verde/vermelho que tem bg alterado dinamicamente pelas funções _apply_*."""
+    return tk.Button(
+        parent,
+        text=text,
+        command=command,
+        bg=COLOR_GREEN_OPAQUE,
+        fg="#142c23",
+        activebackground=COLOR_GREEN_STRONG_ACTIVE,
+        activeforeground="#142c23",
+        disabledforeground=COLOR_GREEN_OPAQUE_FG,
+        bd=0,
+        relief="flat",
+        highlightthickness=0,
+        font=("Segoe UI", 7, "bold"),
+        padx=3,
+        pady=4,
+        wraplength=145,
+        cursor="arrow",
+    )
+
+
 def build_ui():
     global root, combo, returnBox, key, key_entry, sobrepor_btn, self_use_var
     global macro_rune_start_btn, macro_rune_stop_btn
     global start_btn, stop_btn, busca_varinha_btn, busca_water_btn
+    global start_training_btn, stop_training_btn
+    global start_fishing_btn, stop_fishing_btn
+    global start_macro_btn, stop_macro_btn
 
     root = tk.Tk()
     root.title("Exordion 7.4 Pro")
@@ -1088,14 +1270,7 @@ def build_ui():
         style.theme_use("clam")
     except tk.TclError:
         pass
-    style.configure(
-        "Compact.TCombobox",
-        fieldbackground="#20252b",
-        background="#414954",
-        foreground=FG,
-        arrowcolor=FG,
-        padding=2,
-    )
+    style.configure("Compact.TCombobox", fieldbackground="#20252b", background="#414954", foreground=FG, arrowcolor=FG, padding=2)
     style.map(
         "Compact.TCombobox",
         fieldbackground=[("disabled", PANEL), ("readonly", "#20252b")],
@@ -1111,18 +1286,45 @@ def build_ui():
     header.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 2))
     header.columnconfigure(0, weight=1)
     tk.Label(header, text="Exordion 7.4 Pro", bg=BG, fg=FG, font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
-    tk.Label(header, text="● Pronto", bg=BG, fg="#9af0c5", font=("Segoe UI", 8, "bold")).grid(row=0, column=1, sticky="e")
+
+    header_right = tk.Frame(header, bg=BG)
+    header_right.grid(row=0, column=1, sticky="e")
+    tk.Label(header_right, text="● Pronto", bg=BG, fg="#9af0c5", font=("Segoe UI", 8, "bold")).grid(row=0, column=0, padx=(0, 8), sticky="e")
+    sobrepor_btn = tk.Button(
+        header_right,
+        text="Sobrepor: OFF",
+        command=sobrepor_todas_janelas,
+        bg="#414954",
+        fg="#eef2f7",
+        activebackground="#596575",
+        activeforeground="#eef2f7",
+        bd=0,
+        relief="flat",
+        highlightthickness=0,
+        font=("Segoe UI", 7, "bold"),
+        padx=6,
+        pady=3,
+        cursor="hand2",
+    )
+    sobrepor_btn.grid(row=0, column=1, sticky="e")
 
     content = tk.Frame(root, bg=BG)
     content.grid(row=1, column=0, sticky="ew", padx=6)
     content.columnconfigure(0, weight=1, uniform="columns")
     content.columnconfigure(1, weight=1, uniform="columns")
 
-    def make_panel(parent, title, row, column):
+    def make_panel(parent, title, row, column, tooltip_text=None):
         panel = tk.Frame(parent, bg=PANEL, bd=0, padx=7, pady=6, highlightthickness=1, highlightbackground=BORDER)
         panel.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
         panel.columnconfigure(0, weight=1)
-        tk.Label(panel, text=title.upper(), bg=PANEL, fg=FG, font=("Segoe UI", 8, "bold"), anchor="w").grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        title_row = tk.Frame(panel, bg=PANEL)
+        title_row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        title_row.columnconfigure(0, weight=1)
+        tk.Label(title_row, text=title.upper(), bg=PANEL, fg=FG, font=("Segoe UI", 8, "bold"), anchor="w").grid(row=0, column=0, sticky="w")
+        if tooltip_text:
+            help_btn = tk.Label(title_row, text="?", bg=PANEL, fg="#9af0c5", font=("Segoe UI", 9, "bold"), cursor="question_arrow", padx=4)
+            help_btn.grid(row=0, column=1, sticky="e")
+            _Tooltip(help_btn, tooltip_text)
         return panel
 
     def make_button(parent, text, command=None, kind="secondary", state=tk.NORMAL):
@@ -1145,12 +1347,16 @@ def build_ui():
     panel_training = make_panel(content, "Controles de treino", 0, 1)
     panel_training.columnconfigure(0, weight=1)
     panel_training.columnconfigure(1, weight=1)
-    make_button(panel_training, "Iniciar treino", start_treino, "primary").grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
-    make_button(panel_training, "Parar treino", stop_treino, "warning").grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=(0, 3))
+
+    start_training_btn = _make_stateful_button(panel_training, "Iniciar treino", start_treino)
+    start_training_btn.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
+
+    stop_training_btn = _make_stateful_button(panel_training, "Parar treino", stop_treino)
+    stop_training_btn.config(fg="#321719")
+    stop_training_btn.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=(0, 3))
+
     make_button(panel_training, "Selecionar região Battle List", select_battle_list_region, "dark").grid(row=2, column=0, sticky="ew", padx=(0, 2))
-    sobrepor_btn = make_button(panel_training, "Sobrepor: OFF", sobrepor_todas_janelas, "secondary")
-    sobrepor_btn.grid(row=2, column=1, sticky="ew", padx=(2, 0))
-    make_button(panel_training, "Testar captura", preview_battle_list_capture).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
+    make_button(panel_training, "Testar captura", preview_battle_list_capture).grid(row=2, column=1, sticky="ew", padx=(2, 0))
 
     panel_fishing = make_panel(content, "Controles de pesca", 1, 0)
     for col in range(2):
@@ -1159,23 +1365,38 @@ def build_ui():
     varinha_btn.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
     aguas_btn = make_button(panel_fishing, "Capturar águas", search_aguas)
     aguas_btn.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=(0, 3))
-    start_pesca_btn = make_button(panel_fishing, "Iniciar pesca", start_pesca, "primary")
-    start_pesca_btn.grid(row=2, column=0, sticky="ew", padx=(0, 2))
-    stop_pesca_btn = make_button(panel_fishing, "Parar pesca", stop_pesca, "danger")
-    stop_pesca_btn.grid(row=2, column=1, sticky="ew", padx=(2, 0))
+
+    start_fishing_btn = _make_stateful_button(panel_fishing, "Iniciar pesca", start_pesca)
+    start_fishing_btn.grid(row=2, column=0, sticky="ew", padx=(0, 2))
+    stop_fishing_btn = _make_stateful_button(panel_fishing, "Parar pesca", stop_pesca)
+    stop_fishing_btn.config(fg="#321719")
+    stop_fishing_btn.grid(row=2, column=1, sticky="ew", padx=(2, 0))
     make_button(panel_fishing, "Resetar pesca", reset_coordinates).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
 
-    panel_macros = make_panel(content, "Presets e macros", 1, 1)
+    panel_macros = make_panel(
+        content,
+        "Presets e macros",
+        1,
+        1,
+        tooltip_text=(
+            "Shift+F1 inicia a macro de runa automaticamente, "
+            "mesmo com o bot em segundo plano.\n"
+            "ESC para tudo."
+        ),
+    )
     for col in range(3):
         panel_macros.columnconfigure(col, weight=1, uniform="macros")
     make_button(panel_macros, "Carregar", load_runa).grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
     make_button(panel_macros, "Salvar", save_runa).grid(row=1, column=1, sticky="ew", padx=2, pady=(0, 3))
     make_button(panel_macros, "Listar", list_runa).grid(row=1, column=2, sticky="ew", padx=(2, 0), pady=(0, 3))
     make_button(panel_macros, "Capturar runa", search_runa).grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
-    start_macro_btn = make_button(panel_macros, "Iniciar macro", start_macro_rune, "primary")
+
+    start_macro_btn = _make_stateful_button(panel_macros, "Iniciar macro", start_macro_rune)
     start_macro_btn.grid(row=2, column=1, sticky="ew", padx=(2, 2), pady=(0, 3))
-    stop_macro_btn = make_button(panel_macros, "Parar macro", stop_macro_rune, "danger")
+    stop_macro_btn = _make_stateful_button(panel_macros, "Parar macro", stop_macro_rune)
+    stop_macro_btn.config(fg="#321719")
     stop_macro_btn.grid(row=2, column=2, sticky="ew", padx=(2, 0), pady=(0, 3))
+
     make_button(panel_macros, "Capturar player", capture_player_position).grid(row=3, column=0, sticky="ew", padx=(0, 2), pady=(3, 0))
     self_use_var = BooleanVar(value=False)
     tk.Checkbutton(
@@ -1202,9 +1423,11 @@ def build_ui():
 
     root.bind_all("<Escape>", handle_escape)
     _install_global_esc_listener()
+    _install_global_macro_hotkey_listener()
 
     def _on_close():
         _uninstall_global_esc_listener()
+        _uninstall_global_macro_hotkey_listener()
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", _on_close)
@@ -1221,12 +1444,16 @@ def build_ui():
     returnBox.configure(yscrollcommand=scrollbar.set)
     returnBox.insert("1.0", "Exordion 7.4 Pro pronto. Selecione uma janela para começar.\n")
 
-    start_btn = start_pesca_btn
-    stop_btn = stop_pesca_btn
+    start_btn = start_fishing_btn
+    stop_btn = stop_fishing_btn
     busca_varinha_btn = varinha_btn
     busca_water_btn = aguas_btn
     macro_rune_start_btn = start_macro_btn
     macro_rune_stop_btn = stop_macro_btn
+
+    _refresh_training_buttons()
+    _refresh_fishing_buttons()
+    _refresh_macro_buttons()
 
     root.update_idletasks()
     width, height = 600, 400
