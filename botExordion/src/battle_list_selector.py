@@ -17,6 +17,8 @@ class BattleListRow:
     index: int
     bounds: Tuple[int, int, int, int]
     confidence: float
+    # "green" | "yellow" | "red" | "unknown"
+    hp_state: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -40,21 +42,42 @@ class BattleListRegion:
 
 
 class BattleListRegionValidator:
-    """Valida regiões da Battle List usando a resolução do monitor e tamanhos mínimos."""
+    """Valida regiões da Battle List usando os limites do desktop virtual (multi-monitor)."""
 
-    def __init__(self, screen_size: Tuple[int, int] = (1920, 1080), min_width: int = 80, min_height: int = 60):
-        self.screen_size = screen_size
+    def __init__(
+        self,
+        screen_size: Optional[Tuple[int, int]] = None,
+        screen_bounds: Optional[Tuple[int, int, int, int]] = None,
+        min_width: int = 80,
+        min_height: int = 60,
+    ):
+        if screen_bounds is not None:
+            self.bounds: Tuple[int, int, int, int] = tuple(int(v) for v in screen_bounds)
+        elif screen_size is not None:
+            self.bounds = (0, 0, int(screen_size[0]), int(screen_size[1]))
+        else:
+            self.bounds = (0, 0, 1920, 1080)
+
         self.min_width = max(1, int(min_width))
         self.min_height = max(1, int(min_height))
+
+    @property
+    def screen_size(self) -> Tuple[int, int]:
+        return (self.bounds[2], self.bounds[3])
 
     def is_valid(self, region: BattleListRegion) -> bool:
         if region.monitor < 1:
             return False
         if region.width < self.min_width or region.height < self.min_height:
             return False
-        if region.left < 0 or region.top < 0:
+
+        vleft, vtop, vwidth, vheight = self.bounds
+        vright = vleft + vwidth
+        vbottom = vtop + vheight
+
+        if region.left < vleft or region.top < vtop:
             return False
-        if region.right > self.screen_size[0] or region.bottom > self.screen_size[1]:
+        if region.right > vright or region.bottom > vbottom:
             return False
         return True
 
@@ -65,15 +88,11 @@ class BattleListSnapshot:
     state: SelectorState
     complete: bool
     captured_at: float
+    selected_index: Optional[int] = None  # índice da linha atacada, ou None
 
 
 class SafeBattleListTargetSelector:
-    """Selector de alvos com regra de segurança explícita para Battle List.
-
-    A última linha válida da lista é reservada como proteção (mãe / último slot seguro)
-    e nunca pode ser elegível para ataque. A seleção só é liberada quando a lista estiver
-    completa, estável e com confiança suficiente.
-    """
+    """Selector com regra de proteção da última linha (modo Summon)."""
 
     def __init__(self, min_confidence: float = 0.98, required_stable_captures: int = 2):
         self.min_confidence = min_confidence
@@ -122,8 +141,6 @@ class SafeBattleListTargetSelector:
     def get_protected_index(self, snapshot: BattleListSnapshot) -> Optional[int]:
         if not snapshot.rows:
             return None
-        # A última linha é SEMPRE protegida — inclusive em snapshots com 1 alvo.
-        # Isso impede que o único monstro visível seja tratado como alvo elegível.
         return len(snapshot.rows) - 1
 
     def is_candidate_eligible(self, snapshot: BattleListSnapshot, candidate_index: int) -> bool:
@@ -133,7 +150,6 @@ class SafeBattleListTargetSelector:
             return False
         if not self._snapshot_meets_base_rules(snapshot):
             return False
-
         if candidate_index >= len(snapshot.rows):
             return False
 
