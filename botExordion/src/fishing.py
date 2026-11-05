@@ -24,49 +24,63 @@ class Pesca:
                 self.logger.info("ESC pressionado — parando bot")
                 self._stop_event.set()
                 self.status = Status.Inactive
+                return False
         except Exception as e:
             self.logger.error(f"Erro no handler de tecla: {e}")
 
     def Pescar(self):
+        if self.status == Status.Active:
+            return self.stop()
+        return self.start()
+
+    def start(self):
         try:
-            if self.status == Status.Inactive:
-                if self._thread and self._thread.is_alive():
-                    self.logger.info("Bot já está rodando")
-                    return
+            if self._thread and self._thread.is_alive():
+                self.logger.info("Bot já está rodando ou finalizando")
+                return False
 
-                if not self.varinha:
-                    self.logger.error("Varinha não configurada")
-                    return
-                if not self.watersCoords:
-                    self.logger.error("Nenhuma água configurada")
-                    return
-                if not self._action_manager or not self._action_manager.is_valid():
-                    self.logger.error("Action manager inválido")
-                    return
+            if not self.varinha:
+                self.logger.error("Varinha não configurada")
+                return False
+            if not self.watersCoords:
+                self.logger.error("Nenhuma água configurada")
+                return False
+            if not self._action_manager or not self._action_manager.is_valid():
+                self.logger.error("Action manager inválido")
+                return False
 
-                self._kb_listener = keyboard.Listener(on_press=self._on_key_press)
-                self._kb_listener.daemon = True
-                self._kb_listener.start()
+            self._stop_event.clear()
+            self._kb_listener = keyboard.Listener(on_press=self._on_key_press)
+            self._kb_listener.daemon = True
+            self._kb_listener.start()
 
-                self._stop_event.clear()
-                self._thread = threading.Thread(target=self._run, daemon=True)
-                self._thread.start()
-                self.logger.info("Bot de pesca iniciado")
-                self.status = Status.Active
-                return True
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+            self.status = Status.Active
+            self.logger.info("Bot de pesca iniciado")
+            return True
+        except Exception as e:
+            self.logger.error(f"Erro ao iniciar bot: {e}")
+            return False
 
-            self.logger.info("Parando bot")
+    def stop(self):
+        try:
             self._stop_event.set()
             self.status = Status.Inactive
             if self._kb_listener:
-                self._kb_listener.stop()
+                try:
+                    self._kb_listener.stop()
+                except Exception as e:
+                    self.logger.error(f"Erro ao parar listener de teclado: {e}")
                 self._kb_listener = None
-            if self._thread and self._thread.is_alive():
+            if self._thread and self._thread.is_alive() and self._thread is not threading.current_thread():
                 self._thread.join(timeout=2)
-            self._thread = None
+            if self._thread and not self._thread.is_alive():
+                self._thread = None
+            self.logger.info("Bot parado")
             return False
         except Exception as e:
-            self.logger.error(f"Erro ao iniciar/parar bot: {e}")
+            self.logger.error(f"Erro ao parar bot: {e}")
             return False
 
     def getFishingRod(self):
@@ -95,6 +109,7 @@ class Pesca:
 
     def getWaters(self, count: int = 5, timeout: int = 20):
         collected = []
+        listener = None
 
         def _on_click(x, y, button, pressed):
             if pressed:
@@ -104,6 +119,7 @@ class Pesca:
                     return False
 
         try:
+            self.watersCoords = []
             print(f"Clique em {count} locais de água...")
             listener = mouse.Listener(on_click=_on_click)
             listener.start()
@@ -112,15 +128,15 @@ class Pesca:
             while time.time() < end_time and len(collected) < count:
                 time.sleep(0.1)
 
-            listener.stop()
-
-            if collected:
-                self.watersCoords.extend(collected)
-                print(f"Total de águas: {len(self.watersCoords)}")
+            self.watersCoords = collected
+            print(f"Total de águas: {len(self.watersCoords)}")
             return True
         except Exception as e:
             print(f"Erro ao localizar águas: {e}")
             return False
+        finally:
+            if listener is not None:
+                listener.stop()
 
     def _sleep_interruptible(self, seconds: float) -> bool:
         """Dorme em pequenos intervalos para reagir rápido ao ESC.
@@ -137,32 +153,31 @@ class Pesca:
             self.logger.info("Iniciando ciclo de pesca...")
             while not self._stop_event.is_set():
 
-                for i, water in enumerate(self.watersCoords):
-                    if self._stop_event.is_set():
-                        break
+                for water in self.watersCoords:
+                    for _ in range(3):
+                        if self._stop_event.is_set():
+                            break
 
-                    randX = random.randint(-10, 10)
-                    randY = random.randint(-10, 10)
-                    varinha_pos = (self.varinha[0] + randX, self.varinha[1] + randY)
-                    water_pos = (water[0] + randX, water[1] + randY)
+                        randX = random.randint(-10, 10)
+                        randY = random.randint(-10, 10)
+                        varinha_pos = (self.varinha[0] + randX, self.varinha[1] + randY)
+                        water_pos = (water[0] + randX, water[1] + randY)
 
-                    if self._stop_event.is_set():
-                        break
-                    self._action_manager.move_mouse(varinha_pos)
-                    if not self._action_manager.right_click(varinha_pos):
-                        continue
+                        self._action_manager.move_mouse(varinha_pos)
+                        if not self._action_manager.right_click(varinha_pos):
+                            continue
 
-                    if not self._sleep_interruptible(0.5):
-                        break
+                        if not self._sleep_interruptible(0.5):
+                            break
 
-                    if self._stop_event.is_set():
-                        break
-                    self._action_manager.move_mouse(water_pos)
-                    if not self._action_manager.left_click(water_pos):
-                        continue
+                        if self._stop_event.is_set():
+                            break
+                        self._action_manager.move_mouse(water_pos)
+                        if not self._action_manager.left_click(water_pos):
+                            continue
 
-                    if not self._sleep_interruptible(0.5):
-                        break
+                        if not self._sleep_interruptible(0.5):
+                            break
 
         except Exception as e:
             self.logger.error(f"Erro fatal: {e}")

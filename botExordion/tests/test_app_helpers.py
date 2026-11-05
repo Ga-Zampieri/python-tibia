@@ -28,6 +28,40 @@ def test_require_action_manager_accepts_valid_window():
     assert message == ""
 
 
+def test_escape_stops_fishing_without_toggling_it_back_on(monkeypatch):
+    class FishingStub:
+        def __init__(self):
+            self.stop_calls = 0
+
+        def stop(self):
+            self.stop_calls += 1
+
+        def Pescar(self):
+            raise AssertionError("ESC must not toggle fishing")
+
+    class AutoHotkeyStub:
+        def __init__(self):
+            self.stop_calls = 0
+
+        def stop(self):
+            self.stop_calls += 1
+
+    fishing = FishingStub()
+    auto_hotkey = AutoHotkeyStub()
+    monkeypatch.setattr(app.appController, "_fishing", fishing)
+    monkeypatch.setattr(app.appController, "_rune", None)
+    monkeypatch.setattr(app.appController, "_auto_hotkey", auto_hotkey)
+    monkeypatch.setattr(app.appController, "_training", None)
+    monkeypatch.setattr(app, "stop_battle_monitor", lambda: None)
+    monkeypatch.setattr(app, "_refresh_training_buttons", lambda: None)
+    monkeypatch.setattr(app, "_refresh_fishing_buttons", lambda: None)
+    monkeypatch.setattr(app, "_refresh_macro_buttons", lambda: None)
+
+    assert app.handle_escape() == "break"
+    assert fishing.stop_calls == 1
+    assert auto_hotkey.stop_calls == 1
+
+
 def test_training_tick_retries_when_target_becomes_available(monkeypatch):
     app.appController._training = app.TrainingStateMachine()
     app.appController._training.start()

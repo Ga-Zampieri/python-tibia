@@ -130,6 +130,11 @@ def _load_fishing(action_manager):
     return Pesca(action_manager)
 
 
+def _load_auto_hotkey():
+    from src.auto_hotkey import AutoHotkey
+    return AutoHotkey()
+
+
 def _require_action_manager(action_name: str):
     if appController._actionManager is None:
         return False, f"Selecione uma janela antes de {action_name}."
@@ -146,6 +151,7 @@ class AppController:
         self._fishing = None
         self._rune = None
         self._training = None
+        self._auto_hotkey = None
 
 
 sobrepor_janela = False
@@ -171,6 +177,8 @@ _last_summon_attack_key = None
 self_use_var = None
 push_item_var = None
 training_mode_var = None
+auto_hotkey_key_var = None
+auto_hotkey_interval_var = None
 
 
 # ----- Cores dos botões -----
@@ -326,11 +334,14 @@ def handle_escape(event=None):
     try:
         stop_battle_monitor()
         if appController._fishing is not None:
-            try: appController._fishing.Pescar()
+            try: appController._fishing.stop()
             except Exception as exc: print(f"[esc-global] erro pesca: {exc}")
         if appController._rune is not None:
             try: appController._rune.Atacar(False)
             except Exception as exc: print(f"[esc-global] erro runa: {exc}")
+        if appController._auto_hotkey is not None:
+            try: appController._auto_hotkey.stop()
+            except Exception as exc: print(f"[esc-global] erro auto hotkey: {exc}")
         if appController._training is not None:
             try:
                 current = appController._training.state.value
@@ -500,6 +511,14 @@ def _refresh_macro_buttons():
         _apply_green(start_macro_btn, _can_start_macro())
     if globals().get("stop_macro_btn") is not None:
         _apply_red(stop_macro_btn, _macro_is_active())
+    auto_hotkey_active = bool(
+        appController._auto_hotkey is not None
+        and appController._auto_hotkey.is_running
+    )
+    if globals().get("start_auto_hotkey_btn") is not None:
+        _apply_green(start_auto_hotkey_btn, not auto_hotkey_active)
+    if globals().get("stop_auto_hotkey_btn") is not None:
+        _apply_red(stop_auto_hotkey_btn, auto_hotkey_active)
 
 
 # ============================================================
@@ -1169,6 +1188,40 @@ def stop_macro_rune():
     _refresh_training_buttons()
 
 
+def start_auto_hotkey():
+    try:
+        if appController._auto_hotkey is None:
+            appController._auto_hotkey = _load_auto_hotkey()
+        started = appController._auto_hotkey.start(
+            auto_hotkey_key_var.get(),
+            auto_hotkey_interval_var.get(),
+        )
+    except ValueError as exc:
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", f"Configuração do auto hotkey inválida: {exc}\n")
+        return
+    except Exception as exc:
+        logging.exception("Não foi possível iniciar o auto hotkey.")
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", f"Erro ao iniciar o auto hotkey: {exc}\n")
+        return
+
+    returnBox.delete("1.0", tk.END)
+    if started:
+        returnBox.insert("1.0", "Auto hotkey iniciado.\n")
+    else:
+        returnBox.insert("1.0", "Auto hotkey já está em execução.\n")
+    _refresh_macro_buttons()
+
+
+def stop_auto_hotkey():
+    if appController._auto_hotkey is not None:
+        appController._auto_hotkey.stop()
+    returnBox.delete("1.0", tk.END)
+    returnBox.insert("1.0", "Auto hotkey parado.\n")
+    _refresh_macro_buttons()
+
+
 # ============================================================
 # Handlers de pesca
 # ============================================================
@@ -1240,7 +1293,10 @@ def start_pesca():
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Necessário definir ao menos uma água antes de iniciar.\n")
         return
-    appController._fishing.Pescar()
+    started = appController._fishing.start()
+    if not started:
+        returnBox.delete("1.0", tk.END)
+        returnBox.insert("1.0", "Não foi possível iniciar a pesca.\n")
     _refresh_fishing_buttons()
     _refresh_training_buttons()
 
@@ -1250,7 +1306,7 @@ def stop_pesca():
         returnBox.delete("1.0", tk.END)
         returnBox.insert("1.0", "Bot de pesca não está inicializado.\n")
         return
-    appController._fishing.Pescar()
+    appController._fishing.stop()
     returnBox.delete("1.0", tk.END)
     returnBox.insert("1.0", "Pesca parada.\n")
     _refresh_fishing_buttons()
@@ -1506,7 +1562,7 @@ def _make_stateful_button(parent, text, command):
         activebackground=COLOR_GREEN_STRONG_ACTIVE, activeforeground="#142c23",
         disabledforeground=COLOR_GREEN_OPAQUE_FG,
         bd=0, relief="flat", highlightthickness=0,
-        font=("Segoe UI", 7, "bold"), padx=3, pady=4, wraplength=145,
+        font=("Segoe UI", 7, "bold"), padx=2, pady=2, wraplength=135,
         cursor="arrow",
     )
 
@@ -1516,16 +1572,18 @@ def build_ui():
 
     global root, combo, returnBox, key, key_entry, sobrepor_btn
     global self_use_var, push_item_var, training_mode_var
+    global auto_hotkey_key_var, auto_hotkey_interval_var
     global macro_rune_start_btn, macro_rune_stop_btn
     global start_btn, stop_btn, busca_varinha_btn, busca_water_btn
     global start_training_btn, stop_training_btn
     global start_fishing_btn, stop_fishing_btn
     global start_macro_btn, stop_macro_btn
+    global start_auto_hotkey_btn, stop_auto_hotkey_btn
 
     root = tk.Tk()
     root.title("Exordion 7.4 Pro")
-    root.geometry("660x460")
-    root.minsize(620, 420)
+    root.geometry("520x370")
+    root.minsize(480, 350)
     root.configure(bg="#252a31")
     root.resizable(True, True)
 
@@ -1533,13 +1591,30 @@ def build_ui():
     PANEL = "#30363f"
     FG = "#eef2f7"
     MUTED = "#d0d7df"
-    BORDER = "#454d58"
-
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
     except tk.TclError:
         pass
+    style.configure(
+        "Neon.TNotebook",
+        background=BG,
+        borderwidth=0,
+        padding=0,
+        tabmargins=(2, 0, 2, 0),
+    )
+    style.configure(
+        "Neon.TNotebook.Tab",
+        background="#202833",
+        foreground="#b7c8df",
+        padding=(10, 3),
+        font=("Segoe UI", 8, "bold"),
+    )
+    style.map(
+        "Neon.TNotebook.Tab",
+        background=[("selected", "#12384a"), ("active", "#263748")],
+        foreground=[("selected", "#38d9ff"), ("active", FG)],
+    )
     style.configure("Compact.TCombobox", fieldbackground="#20252b",
                     background="#414954", foreground=FG, arrowcolor=FG, padding=2)
     style.map(
@@ -1551,232 +1626,332 @@ def build_ui():
     )
 
     root.columnconfigure(0, weight=1)
-    root.rowconfigure(3, weight=1)
-
     header = tk.Frame(root, bg=BG)
-    header.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 2))
+    header.grid(row=0, column=0, sticky="ew", padx=9, pady=(5, 2))
     header.columnconfigure(0, weight=1)
     tk.Label(header, text="Exordion 7.4 Pro", bg=BG, fg=FG,
-             font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
+        font=("Segoe UI", 13, "bold")).grid(row=0, column=0, sticky="w")
 
     header_right = tk.Frame(header, bg=BG)
     header_right.grid(row=0, column=1, sticky="e")
     tk.Label(header_right, text="● Pronto", bg=BG, fg="#9af0c5",
-             font=("Segoe UI", 8, "bold")).grid(row=0, column=0, padx=(0, 8), sticky="e")
+        font=("Segoe UI", 7, "bold")).grid(row=0, column=0, padx=(0, 6), sticky="e")
     sobrepor_btn = tk.Button(
         header_right, text="Sobrepor: OFF", command=sobrepor_todas_janelas,
         bg="#414954", fg="#eef2f7", activebackground="#596575",
         activeforeground="#eef2f7", bd=0, relief="flat", highlightthickness=0,
-        font=("Segoe UI", 7, "bold"), padx=6, pady=3, cursor="hand2",
+        font=("Segoe UI", 7, "bold"), padx=4, pady=2, cursor="hand2",
     )
     sobrepor_btn.grid(row=0, column=1, sticky="e")
 
-    content = tk.Frame(root, bg=BG)
-    content.grid(row=1, column=0, sticky="ew", padx=6)
-    content.columnconfigure(0, weight=1, uniform="columns")
-    content.columnconfigure(1, weight=1, uniform="columns")
-
-    def make_panel(parent, title, row, column, tooltip_text=None):
-        panel = tk.Frame(parent, bg=PANEL, bd=0, padx=7, pady=6,
-                         highlightthickness=1, highlightbackground=BORDER)
-        panel.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
+    def make_panel(parent, title, tooltip_text=None, accent="#38d9ff"):
+        panel = tk.Frame(
+            parent, bg="#111a28", bd=0, padx=7, pady=6,
+            highlightthickness=1, highlightbackground="#27384f",
+        )
         panel.columnconfigure(0, weight=1)
-        title_row = tk.Frame(panel, bg=PANEL)
-        title_row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        title_row = tk.Frame(panel, bg="#111a28")
+        title_row.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 5))
         title_row.columnconfigure(0, weight=1)
-        tk.Label(title_row, text=title.upper(), bg=PANEL, fg=FG,
-                 font=("Segoe UI", 8, "bold"), anchor="w").grid(row=0, column=0, sticky="w")
+        tk.Label(
+            title_row, text=title, bg="#111a28", fg=accent,
+            font=("Segoe UI", 8, "bold"), anchor="w",
+        ).grid(row=0, column=0, sticky="w")
         if tooltip_text:
-            help_btn = tk.Label(title_row, text="?", bg=PANEL, fg="#9af0c5",
-                                font=("Segoe UI", 9, "bold"),
-                                cursor="question_arrow", padx=4)
+            help_btn = tk.Label(
+                title_row, text="?", bg="#111a28", fg=accent,
+                font=("Segoe UI", 9, "bold"), cursor="question_arrow", padx=4,
+            )
             help_btn.grid(row=0, column=1, sticky="e")
             _Tooltip(help_btn, tooltip_text)
         return panel
 
     def make_button(parent, text, command=None, kind="secondary", state=tk.NORMAL):
         colors = {
-            "primary": ("#8bd5b5", "#2f7c60", "#142c23", "#46534d"),
-            "secondary": ("#d8dfe4", "#9daab6", "#202833", "#46515d"),
-            "warning": ("#e3c47d", "#a46d14", "#30250e", "#514a39"),
-            "danger": ("#d99292", "#8a444a", "#321719", "#513d3f"),
-            "dark": ("#414954", "#596575", FG, "#d0d7df"),
+            "primary": ("#00c98d", "#08e0a1", "#061a18", "#617b73"),
+            "blue": ("#087ee5", "#1597ff", "#f4faff", "#70869a"),
+            "purple": ("#6737db", "#8053f1", "#ffffff", "#7d748f"),
+            "orange": ("#bd5b00", "#df7200", "#fff8ef", "#8c7c6d"),
+            "secondary": ("#202c40", "#2c3d56", "#dce9ff", "#718096"),
+            "dark": ("#172235", "#24344c", FG, "#718096"),
         }
         fill, active, foreground, disabled_foreground = colors[kind]
-        return tk.Button(parent, text=text, command=command, state=state,
-                         bg=fill, fg=foreground, activebackground=active,
-                         activeforeground=FG, disabledforeground=disabled_foreground,
-                         bd=0, relief="flat", highlightthickness=0,
-                         font=("Segoe UI", 7, "bold"), padx=3, pady=4,
-                         wraplength=145, cursor="hand2")
+        return tk.Button(
+            parent, text=text, command=command, state=state,
+            bg=fill, fg=foreground, activebackground=active,
+            activeforeground=FG, disabledforeground=disabled_foreground,
+            bd=0, relief="flat", highlightthickness=1,
+            highlightbackground="#2a3a53", highlightcolor="#38d9ff",
+            font=("Segoe UI", 7, "bold"), padx=3, pady=3,
+            wraplength=135, cursor="hand2",
+        )
 
-    # ----- Painel: Selecionar Janela -----
-    panel_window = make_panel(content, "Selecionar janela", 0, 0)
-    combo = ttk.Combobox(panel_window, state="readonly",
-                         style="Compact.TCombobox", width=22)
-    combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
-    make_button(panel_window, "Listar janelas", get_windows).grid(
-        row=2, column=0, sticky="ew", padx=(0, 2))
-    make_button(panel_window, "Selecionar", select_window).grid(
-        row=2, column=1, sticky="ew", padx=(2, 0))
+    def entry(parent, textvariable, width=8):
+        return tk.Entry(
+            parent, textvariable=textvariable, width=width,
+            bg="#091220", fg=FG, insertbackground=FG, relief="flat",
+            highlightthickness=1, highlightbackground="#2a3a53",
+            highlightcolor="#38d9ff", font=("Consolas", 8),
+        )
 
-    # ----- Painel: Controles de Treino -----
-    panel_training = make_panel(content, "Controles de treino", 0, 1)
+    notebook = ttk.Notebook(root, style="Neon.TNotebook", padding=0)
+    notebook.grid(row=1, column=0, sticky="nsew", padx=7, pady=(0, 3))
+
+    home_tab = tk.Frame(notebook, bg=BG)
+    training_tab = tk.Frame(notebook, bg=BG)
+    fishing_tab = tk.Frame(notebook, bg=BG)
+    macros_tab = tk.Frame(notebook, bg=BG)
+    notebook.add(home_tab, text="Início")
+    notebook.add(training_tab, text="Treino")
+    notebook.add(fishing_tab, text="Pesca")
+    notebook.add(macros_tab, text="Macros")
+
+    for tab in (home_tab, training_tab, fishing_tab, macros_tab):
+        tab.columnconfigure(0, weight=1)
+    home_tab.rowconfigure(1, weight=1)
+    training_tab.rowconfigure(0, weight=1)
+    fishing_tab.rowconfigure(0, weight=1)
+    macros_tab.rowconfigure(0, weight=1)
+
+    macro_settings = tk.Frame(macros_tab, bg=BG)
+    macro_settings.grid(row=0, column=0, sticky="nsew", pady=2)
+    macro_settings.columnconfigure(0, weight=1)
+    macro_settings.rowconfigure(0, weight=3)
+    macro_settings.rowconfigure(1, weight=1)
+
+    # Main page: window selection and compact quick controls.
+    window_panel = make_panel(home_tab, "JANELA DO JOGO", accent="#38d9ff")
+    window_panel.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+    window_panel.columnconfigure(0, weight=1)
+    combo = ttk.Combobox(
+        window_panel, state="readonly", style="Compact.TCombobox", width=28,
+    )
+    combo.grid(row=1, column=0, sticky="ew", padx=(0, 4))
+    make_button(window_panel, "Listar", get_windows).grid(
+        row=1, column=1, sticky="ew", padx=2)
+    make_button(window_panel, "Selecionar", select_window).grid(
+        row=1, column=2, sticky="ew", padx=(2, 0))
+    window_panel.columnconfigure(1, weight=0)
+    window_panel.columnconfigure(2, weight=0)
+
+    quick_controls = tk.Frame(
+        home_tab, bg="#111a28", padx=3, pady=4,
+        highlightthickness=1, highlightbackground="#27384f",
+    )
+    quick_controls.grid(row=1, column=0, sticky="nsew", padx=1, pady=2)
+    for column in range(4):
+        quick_controls.columnconfigure(column * 2, weight=1, uniform="quick")
+        if column < 3:
+            quick_controls.columnconfigure(column * 2 + 1, weight=0, minsize=1)
+
+    def make_quick_card(column, title, subtitle, accent, start_command, stop_command):
+        card = tk.Frame(
+            quick_controls, bg="#111a28", padx=6, pady=4,
+        )
+        grid_column = column * 2
+        card.grid(row=0, column=grid_column, sticky="nsew")
+        if column < 3:
+            tk.Frame(quick_controls, bg="#2a3a53", width=1).grid(
+                row=0, column=grid_column + 1, sticky="ns", pady=5,
+            )
+        card.columnconfigure(0, weight=1)
+        tk.Label(card, text=title, bg="#111a28", fg=accent,
+                      font=("Segoe UI", 8, "bold"), anchor="w").grid(
+            row=0, column=0, sticky="ew")
+        tk.Label(card, text=subtitle, bg="#111a28", fg="#93a8c4",
+                      font=("Segoe UI", 7), anchor="w").grid(
+            row=1, column=0, sticky="ew", pady=(0, 4))
+        actions = tk.Frame(card, bg="#111a28")
+        actions.grid(row=2, column=0, sticky="ew")
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+        start = _make_stateful_button(actions, "Iniciar", start_command)
+        start.configure(
+            bg=COLOR_GREEN_OPAQUE, fg="#dfffee",
+            activebackground=accent, activeforeground="#08131e",
+            font=("Segoe UI", 7, "bold"), padx=2, pady=3, wraplength=65,
+            highlightthickness=1, highlightbackground=accent,
+        )
+        start.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        stop = _make_stateful_button(actions, "Parar", stop_command)
+        stop.configure(
+            bg=COLOR_RED_OPAQUE, fg="#ffe7e7",
+            activebackground="#e45f70", activeforeground="#1c090d",
+            font=("Segoe UI", 7, "bold"), padx=2, pady=3, wraplength=65,
+            highlightthickness=1, highlightbackground="#743d50",
+        )
+        stop.grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        return start, stop
+
+    start_training_btn, stop_training_btn = make_quick_card(
+        0, "TREINO", "Summon creatures", "#00e0a1",
+        start_treino, stop_treino,
+    )
+    start_fishing_btn, stop_fishing_btn = make_quick_card(
+        1, "PESCA", "Captura de peixes", "#19b8ff",
+        start_pesca, stop_pesca,
+    )
+    start_macro_btn, stop_macro_btn = make_quick_card(
+        2, "MACRO RUNA", "Runas automáticas", "#a87aff",
+        start_macro_rune, stop_macro_rune,
+    )
+    start_auto_hotkey_btn, stop_auto_hotkey_btn = make_quick_card(
+        3, "AUTO HOTKEY", "Tecla automática", "#ff9d22",
+        start_auto_hotkey, stop_auto_hotkey,
+    )
+    stop_training_btn.config(fg="#ffe7e7")
+    stop_fishing_btn.config(fg="#ffe7e7")
+    stop_macro_btn.config(fg="#ffe7e7")
+    stop_auto_hotkey_btn.config(fg="#ffe7e7")
+
+    home_hint = tk.Label(
+        home_tab, text="Selecione uma janela e use Iniciar para executar.",
+        bg=BG, fg="#8397b3", font=("Segoe UI", 7),
+    )
+    home_hint.grid(row=2, column=0, sticky="w", padx=4, pady=(3, 0))
+
+    # Feature tabs: configuration lives here; start/stop stays on Início.
+    panel_training = make_panel(
+        training_tab, "CONFIGURAÇÕES DE TREINO", accent="#00e0a1",
+    )
+    panel_training.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
     panel_training.columnconfigure(0, weight=1)
     panel_training.columnconfigure(1, weight=1)
-
-    # Linha 1: modos (radio)
-    mode_row = tk.Frame(panel_training, bg=PANEL)
-    mode_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
-
+    tk.Label(panel_training, text="Tipo de criatura", bg="#111a28", fg="#a9bbd4",
+                  font=("Segoe UI", 7, "bold")).grid(
+        row=1, column=0, columnspan=2, sticky="w", pady=(0, 2))
     training_mode_var = StringVar(value="summon")
     tk.Radiobutton(
-        mode_row, text="Summon Creatures", variable=training_mode_var, value="summon",
-        bg=PANEL, fg=FG, activebackground=PANEL, activeforeground=FG,
-        selectcolor="#20252b", font=("Segoe UI", 8, "bold"),
-    ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        panel_training, text="Summon Creatures", variable=training_mode_var,
+        value="summon", bg="#111a28", fg=FG, activebackground="#111a28",
+        activeforeground=FG, selectcolor="#101b2c",
+        font=("Segoe UI", 8, "bold"),
+    ).grid(row=2, column=0, sticky="w")
     tk.Radiobutton(
-        mode_row, text="Normal Creatures", variable=training_mode_var, value="normal",
-        bg=PANEL, fg=FG, activebackground=PANEL, activeforeground=FG,
-        selectcolor="#20252b", font=("Segoe UI", 8, "bold"),
-    ).grid(row=0, column=1, sticky="w")
+        panel_training, text="Normal Creatures", variable=training_mode_var,
+        value="normal", bg="#111a28", fg=FG, activebackground="#111a28",
+        activeforeground=FG, selectcolor="#101b2c",
+        font=("Segoe UI", 8, "bold"),
+    ).grid(row=2, column=1, sticky="w")
+    tk.Label(panel_training, text="Região de captura", bg="#111a28", fg="#a9bbd4",
+                  font=("Segoe UI", 7, "bold")).grid(
+        row=3, column=0, columnspan=2, sticky="w", pady=(7, 2))
+    make_button(
+        panel_training, "Selecionar região Battle List",
+        select_battle_list_region, "dark",
+    ).grid(row=4, column=0, sticky="ew", padx=(0, 2))
+    make_button(
+        panel_training, "Testar captura",
+        preview_battle_list_capture, "dark",
+    ).grid(row=4, column=1, sticky="ew", padx=(2, 0))
 
-    # Linha 2: iniciar/parar
-    start_training_btn = _make_stateful_button(panel_training, "Iniciar treino", start_treino)
-    start_training_btn.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
-    stop_training_btn = _make_stateful_button(panel_training, "Parar treino", stop_treino)
-    stop_training_btn.config(fg="#321719")
-    stop_training_btn.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=(0, 3))
-
-    # Linha 3: selecionar região / testar
-    make_button(panel_training, "Selecionar região Battle List",
-                select_battle_list_region, "dark").grid(
-        row=3, column=0, sticky="ew", padx=(0, 2))
-    make_button(panel_training, "Testar captura",
-                preview_battle_list_capture).grid(
-        row=3, column=1, sticky="ew", padx=(2, 0))
-
-    # ----- Painel: Pesca -----
-    panel_fishing = make_panel(content, "Controles de pesca", 1, 0)
-    for col in range(2):
-        panel_fishing.columnconfigure(col, weight=1, uniform="fishing")
-
-    varinha_btn = make_button(panel_fishing, "Capturar varinha", search_varinha)
-    varinha_btn.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
-    aguas_btn = make_button(panel_fishing, "Capturar águas", search_aguas)
-    aguas_btn.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=(0, 3))
-
-    start_fishing_btn = _make_stateful_button(panel_fishing, "Iniciar pesca", start_pesca)
-    start_fishing_btn.grid(row=2, column=0, sticky="ew", padx=(0, 2))
-    stop_fishing_btn = _make_stateful_button(panel_fishing, "Parar pesca", stop_pesca)
-    stop_fishing_btn.config(fg="#321719")
-    stop_fishing_btn.grid(row=2, column=1, sticky="ew", padx=(2, 0))
-    make_button(panel_fishing, "Resetar pesca", reset_coordinates).grid(
-        row=3, column=0, columnspan=2, sticky="ew", pady=(3, 0))
-
-    # ----- Painel: Presets e Macros -----
-    panel_macros = make_panel(
-        content, "Presets e macros", 1, 1,
-        tooltip_text=(
-            "Shift+F1 inicia a macro de runa automaticamente.\n"
-            "ESC para tudo.\n\n"
-            "Self Use: clique direito na runa + clique esquerdo no player.\n"
-            "Push Item: drag-and-drop do ponto 1 até o ponto 2 "
-            "(ex.: recarregar arrows/bolts).\n"
-            "Só um dos dois flags pode estar ligado por hotkey."
-        ),
+    panel_fishing = make_panel(
+        fishing_tab, "CONFIGURAÇÕES DE PESCA", accent="#19b8ff",
     )
-    for col in range(3):
-        panel_macros.columnconfigure(col, weight=1, uniform="macros")
+    panel_fishing.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+    panel_fishing.columnconfigure(0, weight=1)
+    panel_fishing.columnconfigure(1, weight=1)
+    varinha_btn = make_button(panel_fishing, "Capturar varinha", search_varinha)
+    varinha_btn.grid(
+        row=1, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
+    aguas_btn = make_button(panel_fishing, "Capturar águas", search_aguas)
+    aguas_btn.grid(
+        row=1, column=1, sticky="ew", padx=(2, 0), pady=(0, 3))
+    make_button(panel_fishing, "Resetar pesca", reset_coordinates).grid(
+        row=2, column=0, columnspan=2, sticky="ew")
 
+    panel_macros = make_panel(
+        macro_settings, "PRESETS E MACROS DE RUNA",
+        tooltip_text=(
+            "Shift+F1 inicia a macro de runa automaticamente. ESC para todos os módulos.\n"
+            "Self Use: clique direito na runa + clique esquerdo no player.\n"
+            "Push Item: arraste do ponto 1 ao ponto 2.",
+        ),
+        accent="#a87aff",
+    )
+    panel_macros.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+    panel_macros.columnconfigure(0, weight=1)
+    panel_macros.columnconfigure(1, weight=1)
+    panel_macros.columnconfigure(2, weight=1)
     make_button(panel_macros, "Carregar", load_runa).grid(
         row=1, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
     make_button(panel_macros, "Salvar", save_runa).grid(
         row=1, column=1, sticky="ew", padx=2, pady=(0, 3))
     make_button(panel_macros, "Listar", list_runa).grid(
         row=1, column=2, sticky="ew", padx=(2, 0), pady=(0, 3))
-
     make_button(panel_macros, "Capturar runa", search_runa).grid(
         row=2, column=0, sticky="ew", padx=(0, 2), pady=(0, 3))
-    start_macro_btn = _make_stateful_button(panel_macros, "Iniciar macro", start_macro_rune)
-    start_macro_btn.grid(row=2, column=1, sticky="ew", padx=(2, 2), pady=(0, 3))
-    stop_macro_btn = _make_stateful_button(panel_macros, "Parar macro", stop_macro_rune)
-    stop_macro_btn.config(fg="#321719")
-    stop_macro_btn.grid(row=2, column=2, sticky="ew", padx=(2, 0), pady=(0, 3))
-
     make_button(panel_macros, "Capturar player", capture_player_position).grid(
-        row=3, column=0, sticky="ew", padx=(0, 2), pady=(3, 0))
-
-    # Linha de flags: Self use | Push item (mutuamente exclusivos)
-    flags_row = tk.Frame(panel_macros, bg=PANEL)
-    flags_row.grid(row=3, column=1, columnspan=2, sticky="w", padx=4, pady=(3, 0))
-
+        row=2, column=1, sticky="ew", padx=2, pady=(0, 3))
+    make_button(panel_macros, "Resetar runas", reset_runa).grid(
+        row=2, column=2, sticky="ew", padx=(2, 0), pady=(0, 3))
     self_use_var = BooleanVar(value=False)
     push_item_var = BooleanVar(value=False)
-
+    flags_row = tk.Frame(panel_macros, bg="#111a28")
+    flags_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 4))
     tk.Checkbutton(
         flags_row, text="Self use", variable=self_use_var,
-        command=update_self_use_mode,
-        bg=PANEL, fg=FG, activebackground=PANEL, activeforeground=FG,
-        selectcolor="#20252b", font=("Segoe UI", 8, "bold"),
+        command=update_self_use_mode, bg="#111a28", fg=FG,
+        activebackground="#111a28", activeforeground=FG,
+        selectcolor="#101b2c", font=("Segoe UI", 8, "bold"),
     ).grid(row=0, column=0, sticky="w")
     tk.Checkbutton(
         flags_row, text="Push item", variable=push_item_var,
-        command=update_push_item_mode,
-        bg=PANEL, fg=FG, activebackground=PANEL, activeforeground=FG,
-        selectcolor="#20252b", font=("Segoe UI", 8, "bold"),
-    ).grid(row=0, column=1, sticky="w", padx=(10, 0))
-
-    make_button(panel_macros, "Resetar runas", reset_runa).grid(
-        row=4, column=0, columnspan=3, sticky="ew", pady=(3, 0))
-
-    # ----- Hotkey -----
-    hotkey_frame = tk.Frame(root, bg=BG)
-    hotkey_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(2, 3))
-    tk.Label(hotkey_frame, text="Hotkey", bg=BG, fg=MUTED,
-             font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 7))
-
+        command=update_push_item_mode, bg="#111a28", fg=FG,
+        activebackground="#111a28", activeforeground=FG,
+        selectcolor="#101b2c", font=("Segoe UI", 8, "bold"),
+    ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+    tk.Label(panel_macros, text="Hotkey da runa", bg="#111a28", fg="#a9bbd4",
+                  font=("Segoe UI", 7, "bold")).grid(
+        row=4, column=0, sticky="w", padx=(0, 3))
     key = StringVar(value="F5")
-    key_entry = tk.Entry(
-        hotkey_frame, textvariable=key, width=8,
-        bg="#20252b", fg=FG, insertbackground=FG, relief="flat",
-        highlightthickness=1, highlightbackground=BORDER,
-        highlightcolor="#82aaff", font=("Consolas", 8),
-    )
-    key_entry.grid(row=0, column=1, sticky="w")
+    key_entry = entry(panel_macros, key, width=8)
+    key_entry.grid(row=4, column=1, sticky="ew", padx=2)
     key_entry.bind(
         "<KeyRelease>",
         lambda event: (key.set(normalize_hotkey(key.get())), sync_self_use_mode()),
     )
 
-    root.bind_all("<Escape>", handle_escape)
-    _install_global_esc_listener()
-    _install_global_macro_hotkey_listener()
-
-    def _on_close():
-        _uninstall_global_esc_listener()
-        _uninstall_global_macro_hotkey_listener()
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", _on_close)
-
-    # ----- Console -----
-    console = tk.Frame(root, bg="#20252b", highlightbackground=BORDER, highlightthickness=1)
-    console.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 8))
-    console.columnconfigure(0, weight=1)
-    console.rowconfigure(1, weight=1)
-
-    tk.Label(console, text="CONSOLE", bg="#20252b", fg=MUTED,
-             font=("Segoe UI", 8, "bold"), anchor="w").grid(
-        row=0, column=0, sticky="ew", padx=6, pady=(4, 1))
-
-    returnBox = tk.Text(
-        console, bg="#20252b", fg=FG, insertbackground=FG,
-        selectbackground="#526b82", selectforeground=FG,
-        relief="flat", height=4, font=("Consolas", 8),
-        wrap="word", padx=6, pady=4, borderwidth=0,
+    panel_auto_hotkey = make_panel(
+        macro_settings, "AUTO HOTKEY",
+        tooltip_text=(
+            "Repete a tecla configurada no intervalo informado, em segundos. "
+            "Inicie e pare pela página Início."
+        ),
+        accent="#ff9d22",
     )
-    returnBox.grid(row=1, column=0, sticky="nsew")
+    panel_auto_hotkey.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
+    panel_auto_hotkey.columnconfigure(1, weight=1)
+    panel_auto_hotkey.columnconfigure(3, weight=1)
+    auto_hotkey_key_var = StringVar(value="F5")
+    auto_hotkey_interval_var = StringVar(value="1")
+    tk.Label(panel_auto_hotkey, text="Hotkey", bg="#111a28", fg="#a9bbd4",
+                  font=("Segoe UI", 7, "bold")).grid(
+        row=1, column=0, sticky="w", padx=(0, 4))
+    entry(panel_auto_hotkey, auto_hotkey_key_var, width=7).grid(
+        row=1, column=1, sticky="ew", padx=(0, 10))
+    tk.Label(panel_auto_hotkey, text="Intervalo (s)", bg="#111a28", fg="#a9bbd4",
+                  font=("Segoe UI", 7, "bold")).grid(
+        row=1, column=2, sticky="w", padx=(0, 4))
+    entry(panel_auto_hotkey, auto_hotkey_interval_var, width=7).grid(
+        row=1, column=3, sticky="ew")
+
+    # Compact console stays visible across tabs.
+    console = tk.Frame(
+        root, bg="#091220", highlightbackground="#27384f", highlightthickness=1,
+    )
+    console.grid(row=2, column=0, sticky="ew", padx=9, pady=(0, 6))
+    console.columnconfigure(0, weight=1)
+    tk.Label(console, text="CONSOLE", bg="#091220", fg="#38d9ff",
+                  font=("Segoe UI", 7, "bold"), anchor="w").grid(
+        row=0, column=0, sticky="ew", padx=5, pady=(3, 1))
+    returnBox = tk.Text(
+        console, bg="#091220", fg=FG, insertbackground=FG,
+        selectbackground="#526b82", selectforeground=FG,
+        relief="flat", height=2, font=("Consolas", 7),
+        wrap="word", padx=5, pady=3, borderwidth=0,
+    )
+    returnBox.grid(row=1, column=0, sticky="ew")
     scrollbar = ttk.Scrollbar(console, orient="vertical", command=returnBox.yview)
     scrollbar.grid(row=1, column=1, sticky="ns")
     returnBox.configure(yscrollcommand=scrollbar.set)
@@ -1786,7 +1961,20 @@ def build_ui():
         "Modo padrão de treino: Summon Creatures.\n",
     )
 
-    # Aliases legados usados por select_window()
+    root.bind_all("<Escape>", handle_escape)
+    _install_global_esc_listener()
+    _install_global_macro_hotkey_listener()
+
+    def _on_close():
+        _uninstall_global_esc_listener()
+        _uninstall_global_macro_hotkey_listener()
+        if appController._auto_hotkey is not None:
+            appController._auto_hotkey.stop()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
+
+    # Keep aliases used by existing integrations.
     start_btn = start_fishing_btn
     stop_btn = stop_fishing_btn
     busca_varinha_btn = varinha_btn
@@ -1799,7 +1987,7 @@ def build_ui():
     _refresh_macro_buttons()
 
     root.update_idletasks()
-    width, height = 660, 460
+    width, height = 520, 370
     x = max(0, (root.winfo_screenwidth() - width) // 2)
     y = max(0, (root.winfo_screenheight() - height) // 2)
     root.geometry(f"{width}x{height}+{x}+{y}")
