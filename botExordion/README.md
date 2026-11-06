@@ -1,57 +1,54 @@
-# Exordion 7.4 Pro
+# Exordion
 
-Aplicação desktop para automatização de Tibia 7.4 em Windows 10/11, com foco em segurança, coordenação de entrada, macros e treinamento. Esta versão preserva a base do projeto original (`botExordion`) e acrescenta uma arquitetura mais robusta para entrada, coordenadas, persistência, testes e empacotamento.
-
-## Visão geral
-
-- Entrada Win32 via `SendInput` e `ctypes`.
-- Modelo lógico de coordenadas independente do cursor físico.
-- Motor de macros personalizáveis.
-- Backend simulado para testes e validação automática.
-- Persistência em SQLite para perfis e regras.
-- Estado explícito para treinamento com slimes.
-- Infraestrutura de benchmark e diagnóstico.
-
-## Requisitos
-
-- Windows 10 ou Windows 11 64 bits.
-- Python 3.12 ou superior.
-- Biblioteca `pywin32` para APIs nativas do Windows.
+Qualidade de vida para Tibia 7.4 em OTservs, no Windows 10/11: hotkeys de runa, treino AFK, pesca e rotinas de manutenção. Confira as regras do seu server antes de usar, porque muitos proíbem macros.
 
 ## Instalação
 
-1. Crie um ambiente virtual: `python -m venv .venv`
-2. Ative o ambiente: `.venv\Scripts\activate`
-3. Instale dependências: `pip install -r requirements.txt`
-4. Instalar tesseract: `https://tesseractocr.org/pt/`
-5. Adicioná-lo ao path windows: `C:\Program Files\Tesseract-OCR\`
-6. Execute a aplicação: `app.bat`, que basicamente roda run.bat como adm.
+1. Instale o Python 3.12 ou superior.
+2. Execute `install.bat`.
 
-## Execução
+## Como abrir
 
-- `python app.py --demo`: executa a validação rápida de integração.
-- `python app.py --gui`: inicia a interface básica local.
-- `pytest -q`: roda a suíte automatizada.
+Use o atalho `app.bat.lnk`. Ele abre direto pelo `pythonw`, sem terminal, e como administrador, que é exigido pelo `BlockInput`.
 
-## Limitações
+Se o atalho parar de funcionar, recrie-o apontando para `.venv\Scripts\pythonw.exe app.py --gui`, com a pasta do projeto em "Iniciar em" e "Executar como administrador" marcado.
 
-- `SendInput` move o cursor global do sistema e não cria um mouse virtual independente.
-- Reconhecimento visual em ambientes reais depende da janela ativa, DPI e renderização do cliente.
-- Treinamento automático exige validação com o cliente real e perfil específico do servidor.
+Para ver a saída no terminal, use `run.bat`. Os erros ficam em `logs/exordion.log`, e a tela Ajustes abre a pasta.
+
+## Módulos
+
+| Módulo | O que faz |
+|---|---|
+| Treino | Ataca pela battle list, nos modos Summon e Normal. |
+| Pesca | Pesca em segundo plano. Não bloqueia seu mouse. |
+| Macros | Runa normal, self use e puxar item por hotkey. |
+| Repetidor | Repete uma macro ou tecla em intervalo fixo, mesmo com o jogo atrás. |
+| Alarme | Toca som e para os módulos AFK se a battle list mudar. |
+| Sobrevivência | Comer, anti-idle e regras por HP e mana. |
+| Rune Maker | Blank rune para a mão, conjura e guarda a runa. |
+
+## Teclas
+
+- `ESC` para tudo, em qualquer janela.
+- `Shift+F1` liga e desliga as macros. Útil para digitar no chat se você usa letras como hotkey.
+- As hotkeys das macros só disparam com o jogo em primeiro plano.
+
+## Segundo plano
+
+- Macros de runa e puxar item bloqueiam o input físico enquanto rodam (`BlockInput`), para um movimento acidental do mouse não causar uma ação errada. Por isso, cada repetição em segundo plano trava seu mouse por um instante.
+- Com o jogo na frente, a runa usa o cursor real. Com o jogo atrás, só alcançável pelo Repetidor ou pelas regras, usa mensagens.
+- Se o puxar item não funcionar no seu cliente, desligue "Arrastar em segundo plano" em Macros.
+- A leitura da tela tenta `PrintWindow`, que funciona com o jogo coberto. Se o cliente não responder, o bot lê a tela, e o jogo precisa ficar visível.
+
+## Perfis
+
+Tudo que você configura é salvo automaticamente em `config/profiles/`, um arquivo por perfil. As posições são relativas à janela do jogo, então movê-la não quebra nada. Na primeira execução, o `assets/runa_mappings.json` antigo é importado.
 
 ## Desenvolvimento
 
-Estrutura principal:
+- `src/bot.py`: toda a lógica, sem dependência de interface.
+- `src/ui.py`: interface em CustomTkinter.
+- `src/action_manager.py`: envio de input para a janela.
+- `src/battle_vision.py`: leitura de pixels.
 
-- `src/coordinates.py`: coordenadas, DPI e conversão.
-- `src/input_controller.py`: backend nativo de entrada.
-- `src/backend.py`: backend simulado.
-- `src/macro_engine.py`: motor de macros.
-- `src/persistence.py`: SQLite.
-- `src/training.py`: máquina de estados.
-- `src/hotkeys.py`: gestão de atalhos.
-- `tests/`: testes automatizados.
-
-## Benchmark
-
-Os benchmarks estão disponíveis via teste e logging estruturado. O cabeçalho básico compara latência e evento por segundo, sempre com medidas reais e registradas.
+Rode os testes com `python -m pytest -q`.

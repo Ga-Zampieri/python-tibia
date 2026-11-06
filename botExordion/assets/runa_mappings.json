@@ -1,29 +1,35 @@
 {
   "player_position": [
-    874,
-    455
+    871,
+    478
   ],
   "mappings": {
-    "g": {
+    "f10": {
+      "rune": [
+        1808,
+        508
+      ],
+      "self_use": false,
+      "push_item": false,
+      "drag_end": null
+    },
+    "f9": {
+      "rune": [
+        1768,
+        508
+      ],
+      "self_use": false,
+      "push_item": false,
+      "drag_end": null
+    },
+    "m": {
       "rune": [
         1772,
-        539
+        640
       ],
-      "self_use": false
-    },
-    "t": {
-      "rune": [
-        1846,
-        537
-      ],
-      "self_use": false
-    },
-    "r": {
-      "rune": [
-        1809,
-        637
-      ],
-      "self_use": true
+      "self_use": true,
+      "push_item": false,
+      "drag_end": null
     }
   }
 }

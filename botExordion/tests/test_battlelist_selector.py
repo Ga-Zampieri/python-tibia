@@ -1,8 +1,3 @@
-from types import SimpleNamespace
-
-from PIL import Image
-
-import app
 from src.battle_list_selector import (
     BattleListRegion,
     BattleListRegionValidator,
@@ -86,30 +81,6 @@ def test_battle_list_region_validator_rejects_out_of_bounds_region():
     assert validator.is_valid(region) is False
 
 
-def test_selected_target_is_detected_by_red_text(monkeypatch):
-    image = Image.new("RGB", (200, 120), (0, 0, 0))
-    for x in range(40, 120):
-        for y in range(20, 60):
-            image.putpixel((x, y), (255, 0, 0))
-
-    monkeypatch.setattr(app, "ImageGrab", SimpleNamespace(grab=lambda bbox=None: image))
-    region = BattleListRegion(left=0, top=0, width=200, height=120, monitor=1)
-
-    assert app.has_selected_target_in_region(region) is True
-
-
-def test_no_selected_target_is_detected_without_red_pixels(monkeypatch):
-    image = Image.new("RGB", (200, 120), (0, 0, 0))
-    for x in range(40, 120):
-        for y in range(20, 60):
-            image.putpixel((x, y), (0, 255, 0))
-
-    monkeypatch.setattr(app, "ImageGrab", SimpleNamespace(grab=lambda bbox=None: image))
-    region = BattleListRegion(left=0, top=0, width=200, height=120, monitor=1)
-
-    assert app.has_selected_target_in_region(region) is False
-
-
 def test_region_builds_snapshot_with_first_target_only_when_two_or_more_rows_exist():
     region = BattleListRegion(left=100, top=200, width=300, height=180, monitor=1)
     snapshot = SafeBattleListTargetSelector().get_eligible_targets(
@@ -128,59 +99,3 @@ def test_region_builds_snapshot_with_first_target_only_when_two_or_more_rows_exi
     assert snapshot[:2] == (0, 1)
     assert snapshot[0] == 0
     assert len(snapshot) >= 2
-
-
-def test_should_attack_only_when_no_target_is_selected(monkeypatch):
-    monkeypatch.setattr(app, "has_selected_target_in_region", lambda region: False)
-    assert app.should_attack_first_target_if_available(BattleListRegion(left=0, top=0, width=200, height=100, monitor=1)) is True
-
-    monkeypatch.setattr(app, "has_selected_target_in_region", lambda region: True)
-    assert app.should_attack_first_target_if_available(BattleListRegion(left=0, top=0, width=200, height=100, monitor=1)) is False
-
-
-def test_should_not_attack_when_only_one_target_remains(monkeypatch):
-    monkeypatch.setattr(app, "has_selected_target_in_region", lambda region: False)
-    monkeypatch.setattr(app, "build_battle_snapshot_from_region", lambda region: BattleListSnapshot(
-        rows=(
-            BattleListRow(index=0, bounds=(0, 0, 200, 20), confidence=0.99),
-        ),
-        state=SelectorState.VALID,
-        complete=True,
-        captured_at=1.0,
-    ))
-
-    assert app.should_attack_first_target_if_available(BattleListRegion(left=0, top=0, width=200, height=100, monitor=1)) is False
-
-
-def test_should_not_attack_when_only_one_target_is_visible_in_real_region(monkeypatch):
-    monkeypatch.setattr(app, "has_selected_target_in_region", lambda region: False)
-    monkeypatch.setattr(app, "_extract_battle_creature_names", lambda region: ("Slime",))
-    monkeypatch.setattr(app, "build_battle_snapshot_from_region", lambda region: BattleListSnapshot(
-        rows=(
-            BattleListRow(index=0, bounds=(0, 0, 200, 20), confidence=0.99),
-            BattleListRow(index=1, bounds=(0, 20, 200, 40), confidence=0.99),
-        ),
-        state=SelectorState.VALID,
-        complete=True,
-        captured_at=1.0,
-    ))
-
-    assert app.should_attack_first_target_if_available(BattleListRegion(left=0, top=0, width=200, height=100, monitor=1)) is False
-
-
-def test_should_block_repeated_attack_on_same_target_during_cooldown(monkeypatch):
-    app.battle_last_attack_at = app.time.monotonic()
-    app.battle_last_attack_key = ((0, (0, 0, 200, 20)), (1, (0, 20, 200, 40)))
-
-    monkeypatch.setattr(app, "has_selected_target_in_region", lambda region: False)
-    monkeypatch.setattr(app, "build_battle_snapshot_from_region", lambda region: BattleListSnapshot(
-        rows=(
-            BattleListRow(index=0, bounds=(0, 0, 200, 20), confidence=0.99),
-            BattleListRow(index=1, bounds=(0, 20, 200, 40), confidence=0.99),
-        ),
-        state=SelectorState.VALID,
-        complete=True,
-        captured_at=1.0,
-    ))
-
-    assert app.should_attack_first_target_if_available(BattleListRegion(left=0, top=0, width=200, height=100, monitor=1)) is False

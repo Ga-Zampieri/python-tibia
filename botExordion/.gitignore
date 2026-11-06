@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 *.zip
+config/profiles/
+config/app.json
+logs/

@@ -1,5 +1,5 @@
 from src.battle_list_selector import BattleListRow, BattleListSnapshot, SelectorState
-from src.training import TrainingStateMachine, TrainingState
+from src.training import AttackPlanner, TrainingMode, TrainingState, TrainingStateMachine
 
 
 def _snapshot(rows):
@@ -47,3 +47,33 @@ def test_training_requires_two_targets_before_attack():
 
     assert short_decision.can_attack is False
     assert machine.get_next_target(short_snapshot) is None
+
+
+def _row(index, hp="green", allowed=True):
+    return BattleListRow(index=index, bounds=(0, index * 20, 100, index * 20 + 20),
+                         confidence=0.98, hp_state=hp, allowed=allowed)
+
+
+def test_normal_mode_skips_rows_outside_allowed_names():
+    machine = TrainingStateMachine(mode=TrainingMode.NORMAL_CREATURES)
+    assert machine.get_next_target(_snapshot((_row(0, allowed=False), _row(1)))) == 1
+
+
+def test_normal_mode_with_only_unknown_rows_has_no_target():
+    machine = TrainingStateMachine(mode=TrainingMode.NORMAL_CREATURES)
+    assert machine.get_next_target(_snapshot((_row(0, allowed=False),))) is None
+
+
+def test_summon_mode_refuses_unknown_first_row():
+    planner = AttackPlanner(TrainingStateMachine())
+    pos, reason = planner.plan(_snapshot((_row(0, allowed=False), _row(1))), 0.0)
+    assert pos is None
+    assert "permitidos" in reason
+
+
+def test_planner_clicks_row_center_and_respects_cooldown():
+    planner = AttackPlanner(TrainingStateMachine())
+    snapshot = _snapshot((_row(0), _row(1)))
+    assert planner.plan(snapshot, 10.0)[0] == (50, 10)
+    assert planner.plan(snapshot, 10.5)[0] is None
+    assert planner.plan(snapshot, 11.5)[0] == (50, 10)

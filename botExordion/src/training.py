@@ -100,6 +100,8 @@ class TrainingStateMachine:
         protected_index = self.selector.get_protected_index(snapshot)
         if protected_index is not None and protected_index == 0:
             return None
+        if not snapshot.rows[0].allowed:
+            return None
         if not self.selector.is_candidate_eligible(snapshot, 0):
             return None
         return 0
@@ -124,6 +126,9 @@ class TrainingStateMachine:
         elif self._last_normal_target is not None and self._last_normal_target < n:
             current_idx = self._last_normal_target
 
+        if current_idx is not None and not snapshot.rows[current_idx].allowed:
+            current_idx = None
+
         self._last_normal_target = current_idx
 
         if current_idx is not None:
@@ -132,7 +137,7 @@ class TrainingStateMachine:
                 return current_idx
             # HP baixo -> procura próximo verde (diferente do atual)
             for i, row in enumerate(snapshot.rows):
-                if i != current_idx and row.hp_state == "green":
+                if i != current_idx and row.allowed and row.hp_state == "green":
                     self._last_normal_target = i
                     return i
             # Sem verdes -> mantém o atual
@@ -140,13 +145,16 @@ class TrainingStateMachine:
 
         # Sem alvo atual -> primeiro verde disponível
         for i, row in enumerate(snapshot.rows):
-            if row.hp_state == "green":
+            if row.allowed and row.hp_state == "green":
                 self._last_normal_target = i
                 return i
 
-        # Sem verdes -> ataca o primeiro da lista
-        self._last_normal_target = 0
-        return 0
+        # Sem verdes -> ataca o primeiro permitido da lista
+        for i, row in enumerate(snapshot.rows):
+            if row.allowed:
+                self._last_normal_target = i
+                return i
+        return None
 
     # ---------- avaliação (usada para display/log) ----------
 
@@ -204,3 +212,55 @@ class TrainingStateMachine:
         self.selector.reset()
         self.last_snapshot = None
         self._last_normal_target = None
+
+
+class AttackPlanner:
+    """Decide onde clicar a cada leitura da battle list."""
+
+    def __init__(self, machine: TrainingStateMachine) -> None:
+        self.machine = machine
+        self._last_key = None
+        self._last_at = 0.0
+
+    def plan(self, snapshot: BattleListSnapshot, now: float):
+        """Devolve (posição do clique ou None, motivo)."""
+        if snapshot is None or not snapshot.complete or not snapshot.rows:
+            return None, "Battle list vazia."
+        if self.machine.mode == TrainingMode.NORMAL_CREATURES:
+            return self._plan_normal(snapshot, now)
+        return self._plan_summon(snapshot, now)
+
+    def _cooling_down(self, key, now: float, seconds: float) -> bool:
+        if key == self._last_key and now - self._last_at < seconds:
+            return True
+        self._last_key = key
+        self._last_at = now
+        return False
+
+    @staticmethod
+    def _center(row: BattleListRow):
+        left, top, right, bottom = row.bounds
+        return ((left + right) // 2, (top + bottom) // 2)
+
+    def _plan_summon(self, snapshot: BattleListSnapshot, now: float):
+        if len(snapshot.rows) <= 1:
+            return None, "É preciso mais de um alvo visível."
+        if snapshot.selected_index is not None:
+            return None, "Já existe um alvo selecionado."
+        if not snapshot.rows[0].allowed:
+            return None, "Primeiro alvo não está na lista de permitidos."
+        key = tuple((row.index, row.bounds) for row in snapshot.rows[:3])
+        if self._cooling_down(key, now, 1.2):
+            return None, "Aguardando cooldown."
+        return self._center(snapshot.rows[0]), "Atacando o primeiro alvo."
+
+    def _plan_normal(self, snapshot: BattleListSnapshot, now: float):
+        target = self.machine.get_next_target(snapshot)
+        if target is None:
+            return None, "Nenhum alvo permitido."
+        if snapshot.selected_index == target:
+            return None, "Alvo já selecionado."
+        if self._cooling_down(target, now, 1.0):
+            return None, "Aguardando cooldown."
+        row = snapshot.rows[target]
+        return self._center(row), f"Atacando alvo #{target} (HP {row.hp_state})."

@@ -19,6 +19,9 @@ class BattleListRow:
     confidence: float
     # "green" | "yellow" | "red" | "unknown"
     hp_state: str = "unknown"
+    # Forma do nome na lista; `allowed` é False se não está na lista de permitidos.
+    signature: str = ""
+    allowed: bool = True
 
 
 @dataclass(frozen=True)
