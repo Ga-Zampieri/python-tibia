@@ -5,13 +5,13 @@ Qualidade de vida para Tibia 7.4 em OTservs, no Windows 10/11: hotkeys de runa, 
 ## Instalação
 
 1. Instale o Python 3.12 ou superior.
-2. Execute `install.bat`.
+2. Execute `install.bat`. Ele instala as dependências e cria o atalho `app.bat.lnk` com os caminhos da sua máquina.
 
 ## Como abrir
 
 Use o atalho `app.bat.lnk`. Ele abre direto pelo `pythonw`, sem terminal, e como administrador, que é exigido pelo `BlockInput`.
 
-Se o atalho parar de funcionar, recrie-o apontando para `.venv\Scripts\pythonw.exe app.py --gui`, com a pasta do projeto em "Iniciar em" e "Executar como administrador" marcado.
+O atalho não vai para o git. Em outro computador, ou se mover a pasta do projeto, execute `install.bat` de novo para recriá-lo.
 
 Para ver a saída no terminal, use `run.bat`. Os erros ficam em `logs/exordion.log`, e a tela Ajustes abre a pasta.
 

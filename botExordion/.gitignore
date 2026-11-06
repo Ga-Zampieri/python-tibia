@@ -9,3 +9,4 @@ __pycache__/
 config/profiles/
 config/app.json
 logs/
+*.lnk
