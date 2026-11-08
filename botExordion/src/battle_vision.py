@@ -10,6 +10,8 @@ from .battle_list_selector import BattleListRow, BattleListSnapshot, SelectorSta
 MAX_ROWS = 20
 NAME_HEIGHT = 13
 SIGNATURE_TOLERANCE = 0.12
+PIXEL_TOLERANCE = 30
+CHANGED_PIXELS_LIMIT = 0.05
 
 
 def crop(frame, rect):
@@ -17,6 +19,14 @@ def crop(frame, rect):
     left, top, width, height = (int(v) for v in rect)
     left, top = max(0, left), max(0, top)
     return frame[top:top + height, left:left + width]
+
+
+def same_image(a, b) -> bool:
+    """Compara por pixels alterados, para um item pequeno não sumir numa média."""
+    if a.shape != b.shape:
+        return False
+    changed = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2) > PIXEL_TOLERANCE
+    return float(changed.mean()) < CHANGED_PIXELS_LIMIT
 
 
 def _bar_masks(area):

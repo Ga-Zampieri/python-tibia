@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 SEND_TIMEOUT_MS = 1000
 GA_ROOT = 2
 MOUSEEVENTF_MOVE = 0x0001
+QUICK_PAUSE = 0.03  # uns dois quadros do cliente: menos que isso ele pode não ver o passo
+QUICK_STEPS = 4
+QUICK_DURATION = 0.04
 MOUSE_FLAGS = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
 
 VK_BY_NAME = {
@@ -217,35 +220,57 @@ class ActionManager:
         time.sleep(0.02)
         ctypes.windll.user32.mouse_event(up, 0, 0, 0, 0)
 
-    def drag_with_cursor(self, start, end, steps: int = 12, duration: float = 0.2) -> bool:
-        """Plano B para clientes que leem o cursor real: traz o jogo para frente."""
+    def _move_cursor(self, x, y) -> None:
+        # O cliente só atualiza a posição com um movimento de verdade.
+        self.set_cursor((x, y))
+        ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, 1, 0, 0, 0)
+        ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, -1, 0, 0, 0)
+
+    def press_with_cursor(self, pos, button: str) -> None:
+        """Clique em botão da interface, no ritmo do arrasto que o cliente aceita.
+
+        O botão só reage se o cursor ainda estiver em cima dele ao soltar."""
+        mouse_event = ctypes.windll.user32.mouse_event
+        down, up = MOUSE_FLAGS[button]
+        with self.lock:
+            self._move_cursor(*self.client_to_screen(pos))
+            time.sleep(0.08)
+            mouse_event(down, 0, 0, 0, 0)
+            try:
+                time.sleep(0.10)
+            finally:
+                mouse_event(up, 0, 0, 0, 0)
+            time.sleep(0.10)
+
+    def drag_with_cursor(self, start, end, steps: int = 12, duration: float = 0.2, quick: bool = False) -> bool:
+        """Plano B para clientes que leem o cursor real: traz o jogo para frente.
+
+        quick corta as esperas para perto do que a macro de runa usa."""
+        settle, hold, release = (QUICK_PAUSE,) * 3 if quick else (0.08, 0.10, 0.08)
+        if quick:
+            steps, duration = QUICK_STEPS, QUICK_DURATION
         mouse_event = ctypes.windll.user32.mouse_event
         left_down, left_up = MOUSE_FLAGS["left"]
         sx, sy = self.client_to_screen(start)
         ex, ey = self.client_to_screen(end)
         original = self.get_cursor()
-
-        def move_to(x, y):
-            self.set_cursor((x, y))
-            mouse_event(MOUSEEVENTF_MOVE, 1, 0, 0, 0)
-            mouse_event(MOUSEEVENTF_MOVE, -1, 0, 0, 0)
-
         pressed = False
         try:
             with self.lock:
-                self.focusWindow()
-                move_to(sx, sy)
-                time.sleep(0.08)
+                if not (quick and self.is_foreground()):
+                    self.focusWindow()
+                self._move_cursor(sx, sy)
+                time.sleep(settle)
                 mouse_event(left_down, 0, 0, 0, 0)
                 pressed = True
-                time.sleep(0.10)
+                time.sleep(hold)
                 for i in range(1, steps + 1):
-                    move_to(int(sx + (ex - sx) * i / steps), int(sy + (ey - sy) * i / steps))
+                    self._move_cursor(int(sx + (ex - sx) * i / steps), int(sy + (ey - sy) * i / steps))
                     time.sleep(max(0.008, duration / steps))
-                time.sleep(0.08)
+                time.sleep(release)
                 mouse_event(left_up, 0, 0, 0, 0)
                 pressed = False
-                time.sleep(0.10)
+                time.sleep(QUICK_PAUSE if quick else 0.10)
             return True
         except Exception as exc:
             logger.error("Erro durante o arrasto com cursor: %s", exc)

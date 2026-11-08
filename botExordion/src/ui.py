@@ -8,12 +8,14 @@ from __future__ import annotations
 import logging
 import os
 import tkinter as tk
+from tkinter import filedialog
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
 from .app_log import LOG_DIR
-from .bot import BotController
+from .bot import MODULE_TITLES, MODULES, BotController
+from .loot import decode_sprite, destination_of, destinations
 from .capture import virtual_screen_bounds
 
 logger = logging.getLogger(__name__)
@@ -27,26 +29,22 @@ MUTED = "#8e94a0"
 ACCENT = "#3ddc97"
 ACCENT_DARK = "#2fae78"
 DANGER = "#e5484d"
+BAG = "#e5b64a"
 
 FONT = "Segoe UI"
 SIZE = (470, 610)
 MINI_SIZE = (340, 48)
 
-MODULES = (
-    ("training", "Treino"),
-    ("fishing", "Pesca"),
-    ("macros", "Macros"),
-    ("repeater", "Repetidor"),
-    ("alarm", "Alarme"),
-    ("survival", "Sobrevivência"),
-    ("rune_maker", "Rune Maker"),
-)
 MACRO_MODES = {"Normal": "normal", "Self use": "self", "Puxar item": "drag"}
 MACRO_LABELS = {value: key for key, value in MACRO_MODES.items()}
 
 
 def font(size=13, weight="normal"):
     return ctk.CTkFont(family=FONT, size=size, weight=weight)
+
+
+LOOT_FILES = (("Lista de loot", "*.json"),)
+PROFILE_FILES = (("Perfil do Exordion", "*.json"),)
 
 
 class ExordionApp(ctk.CTk):
@@ -108,7 +106,7 @@ class ExordionApp(ctk.CTk):
         self.footer = ctk.CTkFrame(self, fg_color="transparent")
         self.footer.grid(row=3, column=0, sticky="ew", padx=14, pady=(8, 10))
         self.footer.columnconfigure(0, weight=1)
-        self.last_log = ctk.CTkLabel(self.footer, text="ESC para tudo · Shift+F1 liga as macros",
+        self.last_log = ctk.CTkLabel(self.footer, text="ESC para tudo · atalhos em Ajustes",
                                      font=font(12), text_color=MUTED, anchor="w")
         self.last_log.grid(row=0, column=0, sticky="ew")
         self._ghost_button(self.footer, "Ver log", self._toggle_log, width=60).grid(row=0, column=1)
@@ -132,6 +130,7 @@ class ExordionApp(ctk.CTk):
             "training": self._page_training,
             "fishing": self._page_fishing,
             "macros": self._page_macros,
+            "loot": self._page_loot,
             "repeater": self._page_repeater,
             "alarm": self._page_alarm,
             "survival": self._page_survival,
@@ -243,10 +242,16 @@ class ExordionApp(ctk.CTk):
                          height=20).pack(anchor="w")
             detail = ctk.CTkLabel(text, text="", font=font(12), text_color=MUTED, anchor="w", height=18)
             detail.pack(anchor="w")
-            switch = ctk.CTkSwitch(row, text="", width=44, progress_color=ACCENT, fg_color=LINE,
-                                   button_color=TEXT, button_hover_color="#ffffff")
-            switch.configure(command=lambda n=name, s=switch: self._flip(n, s))
-            switch.grid(row=0, column=1, padx=(0, 2))
+            if name == "loot":  # age uma vez e termina: não tem estado para ligar
+                switch = None
+                ctk.CTkButton(row, text="Pegar", width=54, height=28, font=font(12), fg_color=CARD_HOVER,
+                              hover_color=LINE, text_color=TEXT,
+                              command=lambda: self.bot.set_module("loot", True)).grid(row=0, column=1, padx=(0, 2))
+            else:
+                switch = ctk.CTkSwitch(row, text="", width=44, progress_color=ACCENT, fg_color=LINE,
+                                       button_color=TEXT, button_hover_color="#ffffff")
+                switch.configure(command=lambda n=name, s=switch: self._flip(n, s))
+                switch.grid(row=0, column=1, padx=(0, 2))
             ctk.CTkButton(row, text="›", width=30, height=30, font=font(18), fg_color="transparent",
                           hover_color=CARD_HOVER, text_color=MUTED,
                           command=lambda n=name: self._open(n)).grid(row=0, column=2, padx=(0, 6))
@@ -335,6 +340,109 @@ class ExordionApp(ctk.CTk):
     def _remove_macro(self, key):
         self.bot.remove_macro(key)
         self._fill_macro_list()
+
+    def _page_loot(self):
+        page = self._detail_page("Loot")
+        card = self._section(page, "Como usar", "Abra o loot e aperte o atalho do Loot, em Ajustes. A cada "
+                                                "aperto ele pega os itens aprendidos, abre as bags, fecha a "
+                                                "janela e termina. Não precisa ligar nada.")
+        card = self._section(page, "Slots", "Abra um container e selecione só a área dos itens. "
+                                            "O loot precisa abrir sempre nesse mesmo lugar.")
+        self._buttons(card, ("Selecionar slots", lambda: self._select_region("loot")),
+                      ("Testar leitura", self._preview_loot))
+        self.loot_targets = self._section(page, "Destinos", "Clique na mochila que recebe os itens. Tudo vai "
+                                                            "para a BP 1, até você trocar em Aprendidos.")
+        card = self._section(page, "Fechar ao terminar", "Clique no X da janela do loot. Ela só fecha se tudo "
+                                                         "correr bem.")
+        self._buttons(card, ("Capturar X", self.bot.capture_loot_close), ("Não fechar", self.bot.clear_loot_close))
+
+        card = self._section(page, "Aprender", "Deixe nos slots só o que quer ensinar e clique no botão. "
+                                               "Pilhas mudam de desenho conforme a quantidade: "
+                                               "ensine cada tamanho, como no ouro.")
+        self._buttons(card, ("Aprender itens", lambda: self.bot.learn_loot("items")),
+                      ("Aprender bags", lambda: self.bot.learn_loot("bags")))
+
+        self.loot_list = self._section(page, "Aprendidos", "Clique em um desenho para trocar a BP ou remover.")
+        self._fill_loot()
+
+        card = self._section(page, "Compartilhar", "A lista leva itens, bags e o número da BP. Quem importa soma à "
+                                                   "própria lista e mantém slots, destinos e X.")
+        self._buttons(card, ("Exportar lista", self._export_loot), ("Importar lista", self._import_loot))
+        return page
+
+    def _export_loot(self):
+        path = filedialog.asksaveasfilename(parent=self, title="Exportar lista de loot", defaultextension=".json",
+                                            initialfile="loot-exordion.json", filetypes=LOOT_FILES)
+        if path:
+            self.bot.export_loot(path)
+
+    def _import_loot(self):
+        path = filedialog.askopenfilename(parent=self, title="Importar lista de loot", filetypes=LOOT_FILES)
+        if path:
+            self.bot.import_loot(path)
+
+    def _fill_loot(self):
+        for card in (self.loot_targets, self.loot_list):
+            for child in card.winfo_children()[2:]:  # mantém título e dica
+                child.destroy()
+        config = self.bot.profile["loot"]
+        targets = destinations(config)
+        for index, point in enumerate(targets):
+            self._loot_target(index, point)
+        self._buttons(self.loot_targets, ("Adicionar BP", lambda: self.bot.capture_loot_destination(len(targets))))
+
+        for target in range(len(targets)):
+            items = [(index, sprite) for index, sprite in enumerate(config["items"])
+                     if destination_of(config, sprite) == target]
+            self._loot_group(f"BP {target + 1}: {len(items)} item(ns)", items, self._item_menu)
+        self._loot_group(f"Bags, que só são abertas: {len(config['bags'])}", list(enumerate(config["bags"])),
+                         self._bag_menu)
+
+    def _loot_target(self, index, point):
+        row = ctk.CTkFrame(self.loot_targets, fg_color="transparent")
+        row.columnconfigure(0, weight=1)
+        ctk.CTkLabel(row, text=f"BP {index + 1}" if point else f"BP {index + 1}: falta capturar", font=font(13),
+                     text_color=TEXT if point else MUTED, anchor="w").grid(row=0, column=0, sticky="ew")
+        capture = self._button(row, "Capturar", lambda: self.bot.capture_loot_destination(index))
+        capture.configure(width=86)
+        capture.grid(row=0, column=1, padx=2)
+        if index:
+            remove = self._button(row, "Remover", lambda: self.bot.remove_loot_destination(index))
+            remove.configure(width=86)
+            remove.grid(row=0, column=2, padx=2)
+        self._place(self.loot_targets, row)
+
+    def _loot_group(self, title, entries, on_click):
+        self._place(self.loot_list, ctk.CTkLabel(self.loot_list, text=title, font=font(12), text_color=MUTED,
+                                                 anchor="w"))
+        if not entries:
+            return
+        grid = ctk.CTkFrame(self.loot_list, fg_color="transparent")
+        for position, (index, sprite) in enumerate(entries):
+            image = ctk.CTkImage(Image.fromarray(decode_sprite(sprite)), size=(32, 32))
+            ctk.CTkButton(grid, text="", image=image, width=40, height=40, fg_color=BG, hover_color=LINE,
+                          command=lambda i=index: on_click(i)).grid(
+                row=position // 8, column=position % 8, padx=2, pady=2)
+        self._place(self.loot_list, grid)
+
+    def _popup(self, entries):
+        menu = tk.Menu(self, tearoff=0, bg=CARD, fg=TEXT, activebackground=LINE, activeforeground=TEXT,
+                       disabledforeground=MUTED, bd=0)
+        for label, command in entries:
+            menu.add_command(label=label, command=command, state="normal" if command else "disabled")
+        menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        menu.grab_release()
+
+    def _item_menu(self, item):
+        config = self.bot.profile["loot"]
+        current = destination_of(config, config["items"][item])
+        entries = [(f"Enviar para BP {target + 1}" if target != current else f"Vai para BP {target + 1}",
+                    (lambda t=target: self.bot.route_loot(item, t)) if target != current else None)
+                   for target in range(len(destinations(config)))]
+        self._popup(entries + [("Remover", lambda: self.bot.remove_loot("items", item))])
+
+    def _bag_menu(self, bag):
+        self._popup([("Remover", lambda: self.bot.remove_loot("bags", bag))])
 
     def _page_repeater(self):
         page = self._detail_page("Repetidor")
@@ -432,7 +540,8 @@ class ExordionApp(ctk.CTk):
         page = self._detail_page("Rune Maker")
         config = self.bot.profile["rune_maker"]
         capture = self.bot.capture_rune_maker
-        card = self._section(page, "Pontos", "A mão precisa estar livre. As blank runes ficam sempre no mesmo slot.")
+        card = self._section(page, "Pontos", "A mão precisa estar livre. As blank runes ficam sempre no mesmo slot. "
+                                                 "Se a blank não chegar na mão, ele para e avisa.")
         self._buttons(card, ("Blank rune", lambda: capture("blank", "blank rune")),
                       ("Mão", lambda: capture("hand", "mão")),
                       ("Destino", lambda: capture("output", "destino")))
@@ -459,11 +568,36 @@ class ExordionApp(ctk.CTk):
                                               fg_color=BG, button_color=LINE, button_hover_color=CARD_HOVER)
         self.profile_menu.set(self.bot.profile_name)
         self._place(card, self.profile_menu)
-        self._buttons(card, ("Novo perfil", self._new_profile), ("Apagar perfil", self._delete_profile))
+        self._buttons(card, ("Novo", self._new_profile), ("Renomear", self._rename_profile),
+                      ("Apagar", self._delete_profile))
+        self._buttons(card, ("Exportar perfil", self._export_profile), ("Importar perfil", self._import_profile))
+
+        self.hotkey_list = self._section(
+            page, "Atalhos",
+            "Ligam e desligam o módulo em qualquer janela; o Loot só age com o jogo na frente. "
+            "Vale Ctrl, Alt e Shift. ESC sempre para tudo.",
+        )
+        self._fill_hotkeys()
 
         card = self._section(page, "Diagnóstico")
         self._buttons(card, ("Abrir pasta de logs", lambda: os.startfile(LOG_DIR)))
         return page
+
+    def _fill_hotkeys(self):
+        for child in self.hotkey_list.winfo_children()[2:]:  # mantém título e dica
+            child.destroy()
+        hotkeys = self.bot.profile["module_hotkeys"]
+        for name, title in MODULES:
+            row = ctk.CTkFrame(self.hotkey_list, fg_color="transparent")
+            row.columnconfigure(0, weight=1)
+            ctk.CTkLabel(row, text=title, font=font(13), text_color=TEXT, anchor="w").grid(
+                row=0, column=0, sticky="ew")
+            self._ghost_button(row, hotkeys[name].upper() or "Definir",
+                               lambda n=name: self.bot.capture_module_hotkey(n), width=120).grid(row=0, column=1)
+            if hotkeys[name]:
+                self._ghost_button(row, "Limpar", lambda n=name: self.bot.clear_module_hotkey(n),
+                                   width=60).grid(row=0, column=2, padx=(4, 0))
+            self._place(self.hotkey_list, row)
 
     # ---------- ações da interface ----------
 
@@ -491,6 +625,24 @@ class ExordionApp(ctk.CTk):
         name = ctk.CTkInputDialog(text="Nome do novo perfil:", title="Novo perfil").get_input()
         if name and name.strip():
             self.bot.create_profile(name)
+            self.current_page = "settings"
+            self._build_pages()
+
+    def _rename_profile(self):
+        name = ctk.CTkInputDialog(text=f"Novo nome para {self.bot.profile_name}:", title="Renomear perfil").get_input()
+        if name and self.bot.rename_profile(name):
+            self.current_page = "settings"
+            self._build_pages()
+
+    def _export_profile(self):
+        path = filedialog.asksaveasfilename(parent=self, title="Exportar perfil", defaultextension=".json",
+                                            initialfile=f"perfil-{self.bot.profile_name}.json", filetypes=PROFILE_FILES)
+        if path:
+            self.bot.export_profile(path)
+
+    def _import_profile(self):
+        path = filedialog.askopenfilename(parent=self, title="Importar perfil", filetypes=PROFILE_FILES)
+        if path and self.bot.import_profile(path):
             self.current_page = "settings"
             self._build_pages()
 
@@ -544,8 +696,22 @@ class ExordionApp(ctk.CTk):
             color = ACCENT if row.allowed else DANGER
             draw.rectangle((row.bounds[0] - left, row.bounds[1] - top,
                             row.bounds[2] - left - 1, row.bounds[3] - top - 1), outline=color)
+        self._show_preview(image, "Prévia da battle list")
+
+    def _preview_loot(self):
+        pixels, slots = self.bot.test_loot()
+        if pixels is None:
+            return
+        image = Image.fromarray(pixels)
+        draw = ImageDraw.Draw(image)
+        colors = {"item": ACCENT, "bag": BAG, "other": DANGER, None: MUTED}
+        for x, y, kind in slots:
+            draw.rectangle((x, y, x + 31, y + 31), outline=colors[kind])
+        self._show_preview(image, "Prévia do loot")
+
+    def _show_preview(self, image, title):
         window = tk.Toplevel(self)
-        window.title("Prévia da battle list")
+        window.title(title)
         window.attributes("-topmost", True)
         photo = ImageTk.PhotoImage(image)
         label = tk.Label(window, image=photo)
@@ -606,6 +772,10 @@ class ExordionApp(ctk.CTk):
                     self.banner.grid_forget()
                 else:
                     self._show_banner(payload, ACCENT, "Cancelar", self.bot.cancel_capture)
+            elif kind == "hotkeys":
+                self._fill_hotkeys()
+            elif kind == "loot":
+                self._fill_loot()
             elif kind == "alarm":
                 self._show_banner(f"ALARME: {payload}", DANGER, "OK", self.banner.grid_forget)
                 self.deiconify()
@@ -621,13 +791,12 @@ class ExordionApp(ctk.CTk):
             self.connection.configure(text="○ Jogo não encontrado", text_color=MUTED)
 
         active = []
-        titles = dict(MODULES)
         for name, (switch, detail) in self.rows.items():
             on, text = status[name]
             detail.configure(text=text)
             if on:
-                active.append(titles[name])
-            if bool(switch.get()) != on:
+                active.append(MODULE_TITLES[name])
+            if switch is not None and bool(switch.get()) != on:
                 switch.select() if on else switch.deselect()
         self.mini_label.configure(text=" · ".join(active) or "Nada ligado")
         self.after(500, self._refresh_status)
