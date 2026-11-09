@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"
 LEGACY_MAPPINGS = ROOT / "assets" / "runa_mappings.json"
 DEFAULT_NAME = "Padrão"
+PROFILE_FORMAT = "exordion-profile"
+NAME_LIMIT = 40
 
 DEFAULT_PROFILE = {
     "window_title": "",
@@ -24,8 +26,23 @@ DEFAULT_PROFILE = {
     # tecla -> {"mode": "normal"|"self"|"drag", "pos": [x, y], "end": [x, y]|None}
     "macros": {},
     "drag_in_background": True,
+    # módulo -> atalho que liga e desliga, como "shift+f1"; vazio não tem atalho.
+    "module_hotkeys": {
+        "training": "",
+        "fishing": "",
+        "macros": "shift+f1",
+        "loot": "",
+        "repeater": "",
+        "alarm": "",
+        "survival": "",
+        "rune_maker": "",
+    },
     "training": {"mode": "summon", "region": None, "allowed_names": []},
     "fishing": {"rod": None, "waters": []},
+    # grid: [left, top, colunas, linhas]; close: o X da janela; items e bags: desenhos aprendidos.
+    # destination é a BP 1 e extra_destinations, as seguintes; routes: desenho -> BP, se não for a 1.
+    "loot": {"grid": None, "destination": None, "extra_destinations": [], "routes": {}, "close": None,
+             "items": [], "bags": []},
     "repeater": {"key": "f5", "interval": 1.0},
     "alarm": {"sound": True, "pause_modules": True},
     "survival": {
@@ -59,6 +76,33 @@ def merge_defaults(defaults: dict, data: dict) -> dict:
         else:
             merged[key] = value
     return merged
+
+
+def _fits(default, value) -> bool:
+    if default is None:  # posições e regiões, que começam vazias
+        return value is None or (isinstance(value, list)
+                                 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value))
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, type(default))
+
+
+def conform(defaults: dict, data) -> dict:
+    """Fica só com o que tem o tipo esperado: um perfil importado pode vir de qualquer lugar."""
+    if not isinstance(data, dict):
+        return {}
+    clean = {}
+    for key, value in data.items():
+        if key not in defaults:
+            continue
+        default = defaults[key]
+        if isinstance(default, dict) and default:
+            clean[key] = conform(default, value)
+        elif _fits(default, value):
+            clean[key] = value
+    return clean
 
 
 def import_legacy_mappings(data: dict) -> dict:
@@ -99,6 +143,32 @@ class ProfileStore:
 
     def names(self) -> list:
         return sorted(path.stem for path in self.dir.glob("*.json"))
+
+    @staticmethod
+    def clean_name(name: str) -> str:
+        """O nome como ele vai ficar salvo, para a lista mostrar o mesmo que foi digitado."""
+        return re.sub(r'[<>:"/\\|?*]', "_", str(name)).strip()[:NAME_LIMIT].strip()
+
+    def exists(self, name: str) -> bool:
+        return self._path(name).exists()
+
+    def unique_name(self, name: str) -> str:
+        base = self.clean_name(name) or DEFAULT_NAME
+        candidate, number = base, 2
+        while self.exists(candidate):
+            candidate = f"{base} ({number})"
+            number += 1
+        return candidate
+
+    def rename(self, old: str, new: str) -> None:
+        source, target = self._path(old), self._path(new)
+        if target.exists() and not os.path.samefile(source, target):
+            raise FileExistsError(new)
+        # Pelo arquivo temporário, porque trocar só maiúsculas no Windows é o mesmo arquivo.
+        temp = target.with_suffix(".tmp")
+        with self._lock:
+            os.replace(source, temp)
+            os.replace(temp, target)
 
     def load(self, name: str) -> dict:
         path = self._path(name)

@@ -1,5 +1,6 @@
 import numpy as np
 
+from src import battle_vision
 from src.battle_vision import analyze_battle_list, bar_percent, name_signature, signatures_match
 
 GREEN = (0, 200, 0)
@@ -100,3 +101,19 @@ def test_bar_percent_ignores_gray_background():
 def test_bar_percent_without_image():
     assert bar_percent(None, (0, 0, 10, 10)) is None
     assert bar_percent(np.zeros((5, 5, 3), dtype=np.uint8), None) is None
+
+
+def test_same_image_notices_a_small_sprite():
+    empty = np.zeros((24, 24, 3), dtype=np.uint8)
+    sprite = empty.copy()
+    sprite[8:14, 8:14] = 200
+
+    assert battle_vision.same_image(empty, empty.copy()) is True
+    assert battle_vision.same_image(empty, sprite) is False
+
+
+def test_same_image_ignores_noise_and_rejects_other_sizes():
+    empty = np.full((24, 24, 3), 100, dtype=np.uint8)
+
+    assert battle_vision.same_image(empty, empty + 10) is True
+    assert battle_vision.same_image(empty, empty[:20]) is False

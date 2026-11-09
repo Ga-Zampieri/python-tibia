@@ -5,22 +5,24 @@ daqui toca em widget.
 """
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import threading
 import time
+from pathlib import Path
 
-from . import battle_vision
+from . import battle_vision, loot
 from .action_manager import ActionManager, key_to_vk
 from .alarm import AlarmMonitor
 from .auto_hotkey import AutoHotkey
 from .capture import capture_client
 from .click_capture import ClickCapture
 from .fishing import Pesca
-from .hotkey_service import HotkeyService
+from .hotkey_service import HotkeyService, combo_name
 from .macros import MacroRunner
 from .rune_maker import RuneMaker
-from .settings import ProfileStore
+from .settings import DEFAULT_PROFILE, PROFILE_FORMAT, ProfileStore, conform, merge_defaults
 from .status import Status
 from .survival import Survival
 from .training import AttackPlanner, TrainingMode, TrainingStateMachine
@@ -32,6 +34,18 @@ BATTLE_SCAN_SECONDS = 1.5
 BARS_SCAN_SECONDS = 0.5
 WINDOW_SCAN_SECONDS = 2.0
 CAPTURE_TIMEOUT_SECONDS = 30
+
+MODULES = (
+    ("training", "Treino"),
+    ("fishing", "Pesca"),
+    ("macros", "Macros"),
+    ("loot", "Loot"),
+    ("repeater", "Repetidor"),
+    ("alarm", "Alarme"),
+    ("survival", "Sobrevivência"),
+    ("rune_maker", "Rune Maker"),
+)
+MODULE_TITLES = dict(MODULES)
 
 
 def beep() -> None:
@@ -57,6 +71,8 @@ class BotController:
         self.target_count = 0
         self.training_started_at = None
         self._click_capture = None
+        self._hotkey_target = None
+        self._toggle_lock = threading.Lock()
 
         self._actions = queue.Queue(maxsize=8)
         self._shutdown = threading.Event()
@@ -105,7 +121,9 @@ class BotController:
         self.machine = TrainingStateMachine(mode=TrainingMode(profile["training"]["mode"]))
         self.planner = AttackPlanner(self.machine)
         self.survival = Survival(profile["survival"], self.run_action)
-        self.rune_maker = RuneMaker(profile["rune_maker"], lambda: self.mana, self.log)
+        self.rune_maker = RuneMaker(profile["rune_maker"], lambda: self.mana, self.log,
+                                    get_frame=self._game_frame, alert=self._notify)
+        self.looter = loot.Looter(profile, self.log, get_frame=self._game_frame, alert=self._notify)
         self._set_action_manager(self.am)
         self.store.remember_last(name)
 
@@ -122,6 +140,55 @@ class BotController:
         self.store.save(name, self.profile)
         self.switch_profile(name)
 
+    def rename_profile(self, name: str) -> bool:
+        new = self.store.clean_name(name)
+        if not new or new == self.profile_name:
+            return False
+        if self.store.exists(new) and new.casefold() != self.profile_name.casefold():
+            self.log(f"Já existe um perfil chamado {new}.")
+            return False
+        self.save()
+        try:
+            self.store.rename(self.profile_name, new)
+        except OSError as exc:
+            self.log(f"Não foi possível renomear o perfil ({exc}).")
+            return False
+        old, self.profile_name = self.profile_name, new
+        self.store.remember_last(new)
+        self.log(f"Perfil {old} agora se chama {new}.")
+        return True
+
+    def export_profile(self, path) -> None:
+        self.save()
+        data = {"format": PROFILE_FORMAT, "version": 1, "name": self.profile_name, "profile": self.profile}
+        try:
+            Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            self.log(f"Não foi possível salvar o perfil ({exc}).")
+            return
+        self.log(f"Perfil {self.profile_name} exportado.")
+
+    def import_profile(self, path) -> bool:
+        """Vira um perfil novo, sem nunca sobrescrever um que já existe."""
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if not isinstance(data, dict) or data.get("format") != PROFILE_FORMAT or not isinstance(data.get("profile"), dict):
+            self.log("Esse arquivo não é um perfil do Exordion.")
+            return False
+        profile = merge_defaults(DEFAULT_PROFILE, conform(DEFAULT_PROFILE, data["profile"]))
+        config = profile["loot"]
+        sprites = {kind: config[kind] for kind in ("items", "bags", "routes")}
+        config.update(items=[], bags=[], routes={})
+        if loot.import_list(config, {"format": loot.LIST_FORMAT, **sprites}) is None:
+            self.log("A lista de loot do perfil estava estragada e ficou de fora.")
+        name = self.store.unique_name(data.get("name") or "Importado")
+        self.store.save(name, profile)
+        self.switch_profile(name)
+        self.log(f"Perfil {name} importado.")
+        return True
+
     def delete_profile(self) -> bool:
         others = [name for name in self.store.names() if name != self.profile_name]
         if not others:
@@ -136,7 +203,7 @@ class BotController:
 
     def _set_action_manager(self, am) -> None:
         self.am = am
-        for module in (self.macros, self.fishing, self.survival, self.rune_maker):
+        for module in (self.macros, self.fishing, self.survival, self.rune_maker, self.looter):
             module.am = am
 
     def attach(self, hwnd: int, remember: bool = True) -> bool:
@@ -187,15 +254,79 @@ class BotController:
 
     # ---------- hotkeys ----------
 
-    def on_key(self, name: str, shift: bool) -> None:
+    def on_key(self, name: str, mods=(), repeat: bool = False) -> None:
+        """Roda no hook do teclado: o que pode demorar vai para `_in_background`."""
         if name == "esc":
-            # stop_all espera threads terminarem, e isto roda no hook do teclado.
-            threading.Thread(target=self.stop_all, daemon=True, name="parar").start()
-        elif shift and name == "f1":
-            self.set_module("macros", not self.macros_on)
-        elif self.macros_on and name in self.profile["macros"]:
-            if self.am is not None and self.am.is_foreground():
-                self._enqueue(name)
+            self._cancel_hotkey_capture()
+            self._in_background(self.stop_all)
+            return
+        if self._hotkey_target is not None:
+            if not repeat:
+                target, self._hotkey_target = self._hotkey_target, None
+                self._in_background(self._assign_hotkey, target, name, mods)
+            return
+        module = self._module_for(combo_name(name, mods))
+        if module is not None:
+            # Segurar a tecla não pode ficar ligando e desligando.
+            if not repeat and self._hotkey_allowed(module):
+                self._in_background(self._toggle_module, module)
+        elif self.macros_on and name in self.profile["macros"] and self._game_in_front():
+            self._enqueue(name)
+
+    def _hotkey_allowed(self, module: str) -> bool:
+        if module != "loot":
+            return True
+        # Age na hora, como uma macro. Um toque a mais não pode cancelar a coleta.
+        return self._game_in_front() and not self.looter.is_running
+
+    def _game_in_front(self) -> bool:
+        return self.am is not None and self.am.is_foreground()
+
+    def _in_background(self, target, *args) -> None:
+        threading.Thread(target=target, args=args, daemon=True, name="atalho").start()
+
+    def _module_for(self, combo: str):
+        for module, hotkey in self.profile["module_hotkeys"].items():
+            if hotkey == combo:
+                return module
+        return None
+
+    def _toggle_module(self, name: str) -> None:
+        with self._toggle_lock:
+            self.set_module(name, not self.status()[name][0])
+
+    def capture_module_hotkey(self, module: str) -> None:
+        """A próxima tecla apertada, em qualquer janela, vira o atalho do módulo."""
+        self.cancel_capture()
+        self._hotkey_target = module
+        self._emit_prompt(f"Aperte o atalho de {MODULE_TITLES[module]}")
+
+    def _cancel_hotkey_capture(self) -> None:
+        if self._hotkey_target is not None:
+            self._hotkey_target = None
+            self._emit_prompt(None)
+
+    def _assign_hotkey(self, module: str, name: str, mods) -> None:
+        self._emit_prompt(None)
+        combo = combo_name(name, mods)
+        owner = self._module_for(combo)
+        if owner not in (None, module):
+            self.log(f"{combo.upper()} já é o atalho de {MODULE_TITLES[owner]}.")
+            return
+        if combo in self.profile["macros"]:
+            self.log(f"{combo.upper()} já é uma macro. Escolha outro atalho.")
+            return
+        if len(name) == 1 and not {"ctrl", "alt"} & set(mods):
+            self.log(f"Atenção: '{combo}' também dispara enquanto você digita, em qualquer janela.")
+        self.profile["module_hotkeys"][module] = combo
+        self.save()
+        self.log(f"{MODULE_TITLES[module]}: atalho {combo.upper()}.")
+        self.events.put(("hotkeys", None))
+
+    def clear_module_hotkey(self, module: str) -> None:
+        self.profile["module_hotkeys"][module] = ""
+        self.save()
+        self.events.put(("hotkeys", None))
 
     def _enqueue(self, key: str) -> None:
         try:
@@ -236,6 +367,7 @@ class BotController:
         self.fishing.stop()
         self.repeater.stop()
         self.rune_maker.stop()
+        self.looter.stop()
         while not self._actions.empty():
             try:
                 self._actions.get_nowait()
@@ -260,6 +392,8 @@ class BotController:
             return False
         result = handler(on)
         self.save()
+        if result:
+            self.log(f"{MODULE_TITLES[name]}: {'ligado' if on else 'desligado'}.")
         return result
 
     def _set_macros(self, on: bool) -> bool:
@@ -267,8 +401,17 @@ class BotController:
             self.log("Cadastre uma macro primeiro.")
             return False
         self.macros_on = on
-        self.log("Macros ligadas." if on else "Macros desligadas.")
         return True
+
+    def _set_loot(self, on: bool) -> bool:
+        if not on:
+            self.looter.stop()
+            return True
+        missing = self.looter.missing()
+        if missing:
+            self.log(f"Loot: falta configurar {missing}.")
+            return False
+        return self.looter.start()
 
     def _set_training(self, on: bool) -> bool:
         if not on:
@@ -391,13 +534,20 @@ class BotController:
                 self.am.left_click(pos)
                 logger.info(reason)
 
+    def _game_frame(self):
+        am = self.am
+        return self._capture_frame(am.hwnd) if am is not None else None
+
     def _raise_alarm(self, message: str) -> None:
-        config = self.profile["alarm"]
-        if config["pause_modules"]:
+        if self.profile["alarm"]["pause_modules"]:
             self._pause_afk_modules()
+        self._notify(message)
+
+    def _notify(self, message: str) -> None:
+        """Avisa com faixa e som, mesmo com o módulo Alarme desligado."""
         self.log(f"ALARME: {message}")
         self.events.put(("alarm", message))
-        if config["sound"]:
+        if self.profile["alarm"]["sound"]:
             threading.Thread(target=beep, daemon=True, name="alarme").start()
 
     # ---------- capturas ----------
@@ -427,6 +577,7 @@ class BotController:
         return True
 
     def cancel_capture(self) -> None:
+        self._cancel_hotkey_capture()
         if self._click_capture is not None:
             self._click_capture.cancel()
 
@@ -434,6 +585,10 @@ class BotController:
         key = str(key).strip().lower()
         if not key:
             self.log("Informe a hotkey antes de capturar.")
+            return False
+        owner = self._module_for(key)
+        if owner is not None:
+            self.log(f"{key.upper()} já é o atalho de {MODULE_TITLES[owner]}.")
             return False
         if len(key) == 1:
             self.log(f"Atenção: '{key}' também dispara enquanto você digita no chat. Prefira teclas F.")
@@ -492,6 +647,120 @@ class BotController:
             self.log(f"Rune maker: {label} salvo.")
         return self._begin_capture(f"Clique em: {label}", 1, done)
 
+    def capture_loot_destination(self, index: int = 0) -> bool:
+        """Captura a BP desse número; um número além da última cria uma nova."""
+        def done(points):
+            config = self.profile["loot"]
+            if index == 0:
+                config["destination"] = points[0]
+            elif index <= len(config["extra_destinations"]):
+                config["extra_destinations"][index - 1] = points[0]
+            else:
+                config["extra_destinations"].append(points[0])
+            self.log(f"Loot: BP {index + 1} salva.")
+            self.events.put(("loot", None))
+        return self._begin_capture(f"Clique na mochila da BP {index + 1}", 1, done)
+
+    def remove_loot_destination(self, index: int) -> None:
+        loot.remove_destination(self.profile["loot"], index)
+        self.save()
+        self.log("Loot: BP removida. Os itens dela voltaram para a BP 1.")
+        self.events.put(("loot", None))
+
+    def route_loot(self, item: int, destination: int) -> None:
+        config = self.profile["loot"]
+        loot.set_route(config, config["items"][item], destination)
+        self.save()
+        self.events.put(("loot", None))
+
+    def capture_loot_close(self) -> bool:
+        def done(points):
+            self.profile["loot"]["close"] = points[0]
+            self.log("X do loot salvo.")
+        return self._begin_capture("Clique no X da janela do loot", 1, done)
+
+    def clear_loot_close(self) -> None:
+        self.profile["loot"]["close"] = None
+        self.save()
+        self.log("O loot não vai mais fechar a janela.")
+
+    def _set_loot_grid(self, rect) -> bool:
+        frame = self._game_frame()
+        grid = loot.find_grid(frame, rect) if frame is not None else None
+        if grid is None:
+            self.log("Não achei os slots aí. Selecione só a área dos itens.")
+            return False
+        self.profile["loot"]["grid"] = grid
+        self.save()
+        self.log(f"Loot: {grid[2]} x {grid[3]} slots. Confira em Testar leitura.")
+        return True
+
+    def learn_loot(self, kind: str) -> None:
+        """Aprende o que está visível agora nos slots: `items` ou `bags`."""
+        config = self.profile["loot"]
+        frame = self._game_frame()
+        if frame is None or not config["grid"]:
+            self.log("Selecione os slots do loot com o jogo aberto.")
+            return
+        known = config["items"] + config["bags"]
+        added = 0
+        for slot in loot.read_slots(frame, config["grid"]):
+            if not loot.is_empty(slot.pixels) and not loot.is_known(slot.pixels, known):
+                sprite = loot.encode_sprite(slot.pixels)
+                config[kind].append(sprite)
+                known.append(sprite)
+                added += 1
+        self.save()
+        self.log(f"Loot: {added} novo(s), {len(config[kind])} no total.")
+        self.events.put(("loot", None))
+
+    def remove_loot(self, kind: str, index: int) -> None:
+        config = self.profile["loot"]
+        config["routes"].pop(config[kind].pop(index), None)
+        self.save()
+        self.events.put(("loot", None))
+
+    def export_loot(self, path) -> None:
+        config = self.profile["loot"]
+        if not config["items"] and not config["bags"]:
+            self.log("Loot: nada aprendido para exportar.")
+            return
+        try:
+            Path(path).write_text(json.dumps(loot.export_list(config)), encoding="utf-8")
+        except OSError as exc:
+            self.log(f"Loot: não foi possível salvar a lista ({exc}).")
+            return
+        self.log(f"Loot: lista exportada, {len(config['items'])} item(ns) e {len(config['bags'])} bag(s).")
+
+    def import_loot(self, path) -> None:
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        added = loot.import_list(self.profile["loot"], data)
+        if added is None:
+            self.log("Loot: esse arquivo não é uma lista de loot válida.")
+            return
+        self.save()
+        self.log(f"Loot: {added} novo(s) importado(s).")
+        self.events.put(("loot", None))
+
+    def test_loot(self):
+        """Lê os slots agora. Devolve (recorte, [(x, y, tipo)]) para a prévia."""
+        grid = self.profile["loot"]["grid"]
+        frame = self._game_frame()
+        if frame is None or not grid:
+            self.log("Selecione os slots do loot com o jogo aberto.")
+            return None, None
+        left, top, columns, rows = grid
+        size = (loot.PITCH * (columns - 1) + loot.SLOT, loot.PITCH * (rows - 1) + loot.SLOT)
+        slots = [(slot.left - left, slot.top - top, self.looter.classify(slot.pixels))
+                 for slot in loot.read_slots(frame, grid)]
+        kinds = [kind for _, _, kind in slots]
+        self.log(f"Loot: {kinds.count('item')} item(ns), {kinds.count('bag')} bag(s), "
+                 f"{kinds.count('other')} ignorado(s).")
+        return battle_vision.crop(frame, (left, top, *size)), slots
+
     def set_region_from_screen(self, target: str, screen_rect) -> bool:
         """Salva um retângulo da tela, relativo à janela do jogo."""
         if self.am is None:
@@ -500,6 +769,8 @@ class BotController:
         left, top, width, height = screen_rect
         client_left, client_top = self.am.screen_to_client((left, top))
         rect = [client_left, client_top, width, height]
+        if target == "loot":
+            return self._set_loot_grid(rect)
         if target == "battle":
             if width < 80 or height < 60:
                 self.log("Região muito pequena para a battle list.")
@@ -577,12 +848,15 @@ class BotController:
         survival_detail = " · ".join(vitals) or f"{rules} regra(s) ativa(s)"
 
         allowed = len(profile["training"]["allowed_names"])
+        missing = self.looter.missing()
+        loot_detail = f"Falta {missing}" if missing else f"{len(profile['loot']['items'])} item(ns) aprendido(s)"
         return {
             "connected": self.am is not None,
             "title": self.am.title() if self.am else "",
             "training": (self.training_on, training_detail),
             "fishing": (fishing_on, fishing_detail),
             "macros": (self.macros_on, f"{len(profile['macros'])} hotkey(s)"),
+            "loot": (self.looter.is_running, loot_detail),
             "repeater": (self.repeater.is_running,
                          f"{profile['repeater']['key']} · {profile['repeater']['interval']} s"),
             "alarm": (self.alarm_on, f"{allowed} nome(s) permitido(s)" if allowed else "Avisa se a lista crescer"),

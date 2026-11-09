@@ -44,6 +44,9 @@ class FakeActionManager:
     def set_cursor(self, pos):
         self.calls.append(("cursor", tuple(pos)))
 
+    def press_with_cursor(self, pos, button):
+        self.calls.append(("cursor_click", button, tuple(pos)))
+
     def click_with_cursor(self, pos, button):
         self.calls.append(("cursor_click", button, tuple(pos)))
 
@@ -59,7 +62,7 @@ class FakeActionManager:
         self.calls.append(("drag", tuple(start), tuple(end)))
         return True
 
-    def drag_with_cursor(self, start, end):
+    def drag_with_cursor(self, start, end, quick=False):
         self.calls.append(("drag_cursor", tuple(start), tuple(end)))
         return True
 
