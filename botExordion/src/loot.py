@@ -257,7 +257,6 @@ class Looter:
         self._finished = False
         self._loot_left_behind = False
         self._scrolled = 0
-        self._quick = True
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -354,30 +353,16 @@ class Looter:
         end = destinations(self.config)[destination_of(self.config, sprite)]
         # Com o jogo na frente, o cliente lê o cursor real e ignora o arrasto por mensagem.
         if self.profile["drag_in_background"] and not self.am.is_foreground():
-            changed = self._dragged(lambda: self.am.drag(start, end), view)
+            drag = lambda: self.am.drag(start, end)  # noqa: E731
         else:
-            changed = self._drag_with_cursor(start, end, view)
+            drag = lambda: self.am.drag_with_cursor(start, end, quick=True)  # noqa: E731
+        changed = self._wait_change(view) if self._act(drag) else None
         if changed is False:
-            return self._give_up("Loot parou: o item não saiu do lugar. Sem cap ou mochila cheia?")
+            # Uma tentativa só: o corpo fica para trás, aberto, e o próximo aperto começa do zero.
+            return self._give_up("Loot: um item não saiu do lugar e deixei esse corpo. Sem cap ou mochila cheia?")
         if changed:
             self.taken += 1
         return bool(changed)
-
-    def _dragged(self, drag, view):
-        return self._wait_change(view) if self._act(drag) else None
-
-    def _drag_with_cursor(self, start, end, view):
-        def drag(quick):
-            return self._dragged(lambda: self.am.drag_with_cursor(start, end, quick=quick), view)
-
-        changed = drag(self._quick)
-        if changed is False and self._quick:
-            # Pode ser mochila cheia, então só o sucesso do arrasto lento desliga o rápido.
-            changed = drag(False)
-            if changed:
-                self._quick = False
-                self.log("Loot: o arraste rápido falhou, voltei ao normal até fechar o bot.")
-        return changed
 
     def _open(self, slot, view) -> bool:
         if not self._click(self._center(slot), "right"):

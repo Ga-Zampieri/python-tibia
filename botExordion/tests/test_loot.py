@@ -479,26 +479,29 @@ def test_game_in_front_drags_quickly():
     assert client.speeds == [True, True]
 
 
-def test_falls_back_to_the_normal_drag_when_the_quick_one_is_refused():
-    client = Client([GOLD, ITEM], foreground=True)
+def test_failed_drag_is_tried_once_and_the_corpse_is_left():
+    client = Client([GOLD, ITEM], can_move=False, foreground=True)
+
+    maker = run(looter(client, close=CLOSE))
+
+    assert client.speeds == [True]
+    assert maker.taken == 0
+    assert "deixei esse corpo" in maker.alerts[0]
+    assert not any(call[0] == "cursor_click" for call in client.calls)
+
+
+def test_a_failure_does_not_slow_down_the_next_corpse():
+    client = Client([GOLD], foreground=True)
     client.refuses_quick = True
+    maker = looter(client)
+    run(maker)
 
-    maker = run(looter(client))
+    client.refuses_quick = False
+    maker._stop_event.clear()
+    run(maker)
 
-    assert maker.taken == 2
-    assert client.speeds == [True, False, False]
-    assert maker.alerts == []
-    assert any("arraste rápido" in message for message in maker.logs)
-
-
-def test_full_backpack_does_not_turn_off_the_quick_drag():
-    client = Client([GOLD], can_move=False, foreground=True)
-
-    maker = run(looter(client))
-
-    assert client.speeds == [True, False]
-    assert maker._quick
-    assert "mochila cheia" in maker.alerts[0]
+    assert client.speeds == [True, True]
+    assert maker.taken == 1
 
 
 def config_with(items=(), bags=()):
