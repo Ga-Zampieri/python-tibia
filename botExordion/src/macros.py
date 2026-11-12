@@ -28,7 +28,12 @@ class MacroRunner:
             if not player:
                 self.log(f"'{key}': capture a posição do player primeiro.")
                 return False
+        return self.use_rune_on(macro["pos"], player, f"'{key}'")
 
+    def use_rune_on(self, pos, target, label: str) -> bool:
+        """Clica com o direito na runa e, se houver alvo, com o esquerdo nele."""
+        if self.am is None:
+            return False
         with self.am.guarded() as blocked:
             if not blocked:
                 self.log("Não foi possível bloquear o input. Abra o bot como administrador.")
@@ -36,10 +41,10 @@ class MacroRunner:
             try:
                 # Com o jogo atrás, o cursor real clicaria na janela que está na frente.
                 if self.am.is_foreground():
-                    return self._rune_with_cursor(macro["pos"], player)
-                return self._rune_with_messages(macro["pos"], player)
+                    return self._rune_with_cursor(pos, target)
+                return self._rune_with_messages(pos, target)
             except Exception as exc:
-                self.log(f"Erro ao usar a runa de '{key}': {exc}")
+                self.log(f"Erro ao usar a runa de {label}: {exc}")
                 return False
 
     def _rune_with_cursor(self, pos, player) -> bool:

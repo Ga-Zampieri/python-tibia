@@ -10,6 +10,12 @@ from .battle_list_selector import BattleListRow, BattleListSnapshot, SelectorSta
 MAX_ROWS = 20
 NAME_HEIGHT = 13
 SIGNATURE_TOLERANCE = 0.12
+DARK_LEVEL = 20        # moldura da barra de HP: preto puro
+BAR_MIN_INNER = 2      # altura do preenchimento entre as bordas da moldura
+BAR_MAX_INNER = 6
+TEXT_LEVEL = 100       # texto do nome, em qualquer cor
+WORD_GAP = 2           # letras da mesma palavra ficam a no máximo 2 colunas
+ICON_WIDTH = 11        # caveira/escudo antes do nome: nenhuma palavra é tão estreita
 PIXEL_TOLERANCE = 30
 CHANGED_PIXELS_LIMIT = 0.05
 
@@ -30,36 +36,70 @@ def same_image(a, b) -> bool:
 
 
 def _bar_masks(area):
+    """Cores do preenchimento da barra de HP (só usadas dentro da moldura)."""
     r = area[:, :, 0].astype(np.int16)
     g = area[:, :, 1].astype(np.int16)
     b = area[:, :, 2].astype(np.int16)
     green = (g >= 65) & (g > r * 1.20) & (g > b * 1.15) & (r < 155) & (b < 155)
     yellow = ((r >= 150) & (g >= 130) & (b < 110)
               & (r > b * 1.5) & (g > b * 1.3) & (np.abs(r - g) < 70))
-    red = (r >= 100) & (r > g * 1.25) & (r > b * 1.20) & (g < 155)
+    red = (r >= 70) & (r > g * 1.25) & (r > b * 1.20) & (g < 155)
     return green, yellow, red
 
 
-def _group_rows(mask, width):
-    min_pixels = max(8, int(width * 0.04))
-    min_span = max(12, int(width * 0.06))
-    active = []
-    for y in range(mask.shape[0]):
-        xs = np.flatnonzero(mask[y])
-        if len(xs) >= min_pixels and int(xs[-1]) - int(xs[0]) + 1 >= min_span:
-            active.append(y)
-    if not active:
-        return []
-    blocks = []
-    top = bottom = active[0]
-    for y in active[1:]:
-        if y - bottom <= 4:
-            bottom = y
-        else:
-            blocks.append((top, bottom))
-            top = bottom = y
-    blocks.append((top, bottom))
-    return [block for block in blocks if block[1] > block[0]]
+def _longest_dark_run(row):
+    """(início, fim) da maior sequência de pixels pretos da linha, ou None."""
+    dark = row.max(axis=1) <= DARK_LEVEL
+    if not dark.any():
+        return None
+    edges = np.diff(np.concatenate(([0], dark.astype(np.int8), [0])))
+    starts = np.flatnonzero(edges == 1)
+    ends = np.flatnonzero(edges == -1) - 1
+    best = int(np.argmax(ends - starts))
+    return int(starts[best]), int(ends[best])
+
+
+def _find_bars(area):
+    """Barras de HP pela moldura preta: duas linhas pretas iguais com o
+    preenchimento entre elas. Caveiras, sprites e o contorno de alvo nunca
+    formam essa moldura, então não viram linhas fantasmas."""
+    height, width = area.shape[:2]
+    min_width = max(30, int(width * 0.4))
+    runs = [_longest_dark_run(area[y]) for y in range(height)]
+    bars = []
+    y = 0
+    while y < height:
+        run = runs[y]
+        if run is None or run[1] - run[0] + 1 < min_width:
+            y += 1
+            continue
+        found = None
+        for gap in range(BAR_MIN_INNER + 1, BAR_MAX_INNER + 2):
+            other = runs[y + gap] if y + gap < height else None
+            if other is None or abs(other[0] - run[0]) > 1 or abs(other[1] - run[1]) > 1:
+                continue
+            inner = area[y + 1:y + gap, run[0] + 1:run[1]]
+            # Por dentro não pode ser tudo preto (seriam só duas bordas quaisquer).
+            if inner.size and (inner.max(axis=2) > DARK_LEVEL).mean() > 0.3:
+                found = gap
+                break
+        if found is None:
+            y += 1
+            continue
+        bars.append((y, y + found, run[0], run[1]))
+        y += found + 1
+    return bars
+
+
+def _hp_of(inner):
+    """(estado, porcentagem) do preenchimento dentro da moldura."""
+    green, yellow, red = _bar_masks(inner)
+    counts = {"green": int(green.sum()), "yellow": int(yellow.sum()), "red": int(red.sum())}
+    filled = (green | yellow | red).any(axis=0)
+    percent = round(float(filled.sum()) * 100.0 / max(1, inner.shape[1]), 1)
+    if not any(counts.values()):
+        return "red", 0.0
+    return max(counts, key=counts.get), percent
 
 
 def _is_row_selected(area, row_top, row_bottom, bar_top, bar_bottom) -> bool:
@@ -72,17 +112,42 @@ def _is_row_selected(area, row_top, row_bottom, bar_top, bar_bottom) -> bool:
         r = strip[:, :, 0].astype(np.int16)
         g = strip[:, :, 1].astype(np.int16)
         b = strip[:, :, 2].astype(np.int16)
-        red += int(((r > 160) & (g < 120) & (b < 120)).sum())
+        # Contorno e nome do alvo: vermelho puro, ou rosa (255,136,136) com o mouse
+        # em cima. Caveira vermelha é mais escura; o hover sozinho é branco.
+        target = (r >= 200) & (g <= 60) & (b <= 60)
+        hovered_target = (r >= 230) & (g >= 100) & (g <= 170) & (np.abs(g - b) <= 15)
+        red += int((target | hovered_target).sum())
         total += strip.shape[0] * strip.shape[1]
-    return total > 0 and red / total > 0.03
+    return total > 0 and red / total > 0.015
+
+
+def _drop_leading_icons(ink):
+    """Tira caveira/escudo da frente do nome. Junta as letras em palavras (as
+    letras ficam a 1 coluna uma da outra) e descarta a primeira "palavra" se ela
+    for estreita como um ícone e vier separada do resto por um espaço."""
+    columns = ink.any(axis=0)
+    xs = np.flatnonzero(columns)
+    if len(xs) == 0:
+        return ink
+    words = [[int(xs[0]), int(xs[0])]]
+    for x in xs[1:]:
+        if x - words[-1][1] <= WORD_GAP:
+            words[-1][1] = int(x)
+        else:
+            words.append([int(x), int(x)])
+    while len(words) > 1 and words[0][1] - words[0][0] + 1 <= ICON_WIDTH:
+        ink[:, :words[1][0]] = False
+        words.pop(0)
+    return ink
 
 
 def name_signature(pixels) -> str:
     """Forma do texto do nome. A fonte do cliente é fixa, então o mesmo nome gera
-    sempre o mesmo desenho, seja qual for a cor."""
+    sempre o mesmo desenho, em qualquer cor: cinza, branco com o mouse em cima,
+    vermelho quando é o alvo. Ícones na frente do nome são descartados."""
     if pixels.size == 0:
         return ""
-    ink = pixels.max(axis=2) >= 130
+    ink = _drop_leading_icons(pixels.max(axis=2) >= TEXT_LEVEL)
     ys, xs = np.nonzero(ink)
     if len(xs) < 4:
         return ""
@@ -96,6 +161,18 @@ def _unpack_signature(signature: str):
     width, height = (int(v) for v in size.split("x"))
     bits = np.unpackbits(np.frombuffer(bytes.fromhex(data), dtype=np.uint8))
     return bits[:width * height].reshape(height, width).astype(bool)
+
+
+def signature_image(signature: str, padding: int = 2):
+    """Desenha o nome salvo (texto claro em fundo escuro), para mostrar na tela."""
+    try:
+        ink = _unpack_signature(signature)
+    except ValueError:
+        return None
+    height, width = ink.shape
+    image = np.full((height + 2 * padding, width + 2 * padding, 3), 30, dtype=np.uint8)
+    image[padding:padding + height, padding:padding + width][ink] = 220
+    return image
 
 
 def signatures_match(a: str, b: str) -> bool:
@@ -115,54 +192,42 @@ def signatures_match(a: str, b: str) -> bool:
     return differing / max(1, np.count_nonzero(left)) <= SIGNATURE_TOLERANCE
 
 
-def analyze_battle_list(frame, region, allowed=()):
-    """Monta o snapshot da battle list. `region` e os bounds são coordenadas cliente."""
+def analyze_battle_list(frame, region, allowed=(), ignored=()):
+    """Monta o snapshot da battle list. `region` e os bounds são coordenadas cliente.
+
+    `allowed`: nomes para atacar (vazia = qualquer um). `ignored`: nomes que
+    nunca são atacados, mas também não contam como desconhecidos no Alarme."""
     now = time.time()
     empty = BattleListSnapshot((), SelectorState.UNCERTAIN, False, now, None)
     if frame is None or region is None:
         return empty
     left, top = int(region[0]), int(region[1])
-    area_full = crop(frame, region)
-    height, width = area_full.shape[:2]
+    area = crop(frame, region)
+    height, width = area.shape[:2]
     if height < 5 or width < 10:
         return empty
 
-    start_y = min(25, height // 4)  # pula o título da janela da battle list
-    area = area_full[start_y:]
-    green, yellow, red = _bar_masks(area)
-    mask = green | yellow | red
-
     rows = []
     selected = None
-    last_center = None
-    for bar_top, bar_bottom in _group_rows(mask, width):
+    for bar_top, bar_bottom, bar_left, bar_right in _find_bars(area):
         row_top = max(0, bar_top - NAME_HEIGHT)
-        row_bottom = min(area.shape[0], bar_bottom + 4)
-        center = (row_top + row_bottom) // 2
-        if last_center is not None and abs(center - last_center) <= 4:
-            continue
-        last_center = center
-
-        band = slice(bar_top, bar_bottom + 1)
-        counts = {
-            "green": int(green[band].sum()),
-            "yellow": int(yellow[band].sum()),
-            "red": int(red[band].sum()),
-        }
-        hp_state = max(counts, key=counts.get)
-
-        bar_left = int(np.flatnonzero(mask[band].any(axis=0))[0])
-        signature = name_signature(area[row_top:bar_top, bar_left:])
-        is_allowed = not allowed or any(signatures_match(signature, known) for known in allowed)
+        row_bottom = min(height, bar_bottom + 3)
+        hp_state, hp_percent = _hp_of(area[bar_top + 1:bar_bottom, bar_left + 1:bar_right])
+        signature = name_signature(area[row_top:bar_top, bar_left:bar_right + 1])
+        is_ignored = any(signatures_match(signature, known) for known in ignored)
+        is_allowed = not is_ignored and (
+            not allowed or any(signatures_match(signature, known) for known in allowed))
 
         index = len(rows)
         rows.append(BattleListRow(
             index=index,
-            bounds=(left, top + start_y + row_top, left + width, top + start_y + row_bottom),
+            bounds=(left, top + row_top, left + width, top + row_bottom),
             confidence=0.98,
             hp_state=hp_state,
             signature=signature,
             allowed=is_allowed,
+            ignored=is_ignored,
+            hp_percent=hp_percent,
         ))
         if _is_row_selected(area, row_top, row_bottom, bar_top, bar_bottom):
             selected = index

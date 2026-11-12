@@ -501,3 +501,64 @@ def test_rename_refuses_a_name_already_taken(bot):
     bot.store.save("Outro", {})
     assert not bot.rename_profile("Outro")
     assert "Outro" in bot.store.names() and bot.profile_name in bot.store.names()
+
+
+def test_allowed_names_can_be_removed_one_by_one(bot):
+    bot.profile["training"]["region"] = [0, 0, 200, 240]
+    bot.frames["frame"] = battle_frame(rows=1)
+    bot.learn_visible_names()
+    assert len(bot.profile["training"]["allowed_names"]) == 1
+
+    bot.remove_name("allowed", 5)  # índice inválido não mexe na lista
+    assert len(bot.profile["training"]["allowed_names"]) == 1
+
+    bot.remove_name("allowed", 0)
+    assert bot.profile["training"]["allowed_names"] == []
+    assert ("names", None) in list(bot.events.queue)
+
+
+def test_ignored_name_is_skipped_and_never_alarms(bot):
+    bot.profile["training"]["region"] = [0, 0, 200, 240]
+    bot.frames["frame"] = battle_frame(rows=2)
+    bot.learn_visible_names()
+    assert len(bot.profile["training"]["allowed_names"]) == 2
+
+    bot.set_name_ignored("allowed", 0, True)
+    rows = bot.read_battle_list(bot.frames["frame"]).rows
+    assert [(row.allowed, row.ignored) for row in rows] == [(False, True), (True, False)]
+    assert bot.alarm.evaluate(bot.read_battle_list(bot.frames["frame"]), 0.0, True) is None
+
+    bot.set_name_ignored("ignored", 0, False)
+    assert len(bot.profile["training"]["ignored_names"]) == 0
+    assert len(bot.profile["training"]["allowed_names"]) == 2
+
+
+def test_summon_does_not_attack_when_only_one_mob_is_attackable(bot):
+    bot.profile["training"]["region"] = [0, 0, 200, 240]
+    bot.frames["frame"] = battle_frame(rows=2)
+    bot.learn_visible_names()
+    bot.set_name_ignored("allowed", 0, True)
+    bot.set_module("training", True)
+
+    bot.vision_tick(10.0)
+
+    assert bot.am.calls == []
+
+
+def test_normal_mode_heals_low_target_with_the_rune(bot):
+    from src.battle_list_selector import BattleListRow, BattleListSnapshot, SelectorState
+
+    training = bot.profile["training"]
+    training["mode"] = "normal"
+    training["region"] = [0, 0, 200, 240]
+    training["heal"].update(enabled=True, rune=[7, 8], below=30)
+    row = BattleListRow(index=0, bounds=(0, 0, 100, 20), confidence=0.98, hp_state="red", hp_percent=20.0)
+    snapshot = BattleListSnapshot((row,), SelectorState.VALID, True, 0.0, 0)
+    bot.read_battle_list = lambda frame: snapshot
+    bot.frames["frame"] = battle_frame(rows=1)
+    bot.am.foreground = False
+    bot.set_module("training", True)
+
+    bot.vision_tick(10.0)
+
+    assert bot.am.calls == [("right", (7, 8)), ("left", (50, 10))]

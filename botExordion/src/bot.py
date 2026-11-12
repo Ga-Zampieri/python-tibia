@@ -25,7 +25,7 @@ from .rune_maker import RuneMaker
 from .settings import DEFAULT_PROFILE, PROFILE_FORMAT, ProfileStore, conform, merge_defaults
 from .status import Status
 from .survival import Survival
-from .training import AttackPlanner, TrainingMode, TrainingStateMachine
+from .training import AttackPlanner, HealPlanner, NormalOrder, TrainingMode, TrainingStateMachine
 from .window_handler import getWindows, pick_game_window
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,7 @@ class BotController:
         self.fishing = Pesca(profile["fishing"])
         self.machine = TrainingStateMachine(mode=TrainingMode(profile["training"]["mode"]))
         self.planner = AttackPlanner(self.machine)
+        self.healer = HealPlanner()
         self.survival = Survival(profile["survival"], self.run_action)
         self.rune_maker = RuneMaker(profile["rune_maker"], lambda: self.mana, self.log,
                                     get_frame=self._game_frame, alert=self._notify)
@@ -422,13 +423,19 @@ class BotController:
         if not self.profile["training"]["region"]:
             self.log("Selecione a região da battle list primeiro.")
             return False
-        self.machine.set_mode(TrainingMode(self.profile["training"]["mode"]))
+        self.apply_training_mode()
+        self.healer.reset()
         self.machine.start()
         self.machine.train()
         self.training_on = True
         self.training_started_at = time.monotonic()
         self._next_battle = 0.0
         return True
+
+    def apply_training_mode(self) -> None:
+        """Leva o tipo de criatura e a ordem do Normal do perfil para o treino."""
+        training = self.profile["training"]
+        self.machine.set_mode(TrainingMode(training["mode"]), NormalOrder(training["normal_order"]))
 
     def _set_fishing(self, on: bool) -> bool:
         if not on:
@@ -514,7 +521,7 @@ class BotController:
     def read_battle_list(self, frame):
         training = self.profile["training"]
         return battle_vision.analyze_battle_list(
-            frame, training["region"], training["allowed_names"]
+            frame, training["region"], training["allowed_names"], training["ignored_names"]
         )
 
     def _scan_battle(self, frame, now: float) -> None:
@@ -533,6 +540,14 @@ class BotController:
             if pos is not None:
                 self.am.left_click(pos)
                 logger.info(reason)
+            elif self.machine.mode == TrainingMode.NORMAL_CREATURES:
+                self._heal_target(snapshot, now)
+
+    def _heal_target(self, snapshot, now: float) -> None:
+        heal = self.profile["training"]["heal"]
+        pos, reason = self.healer.plan(snapshot, now, heal)
+        if pos is not None and self.macros.use_rune_on(heal["rune"], pos, "cura"):
+            logger.info(reason)
 
     def _game_frame(self):
         am = self.am
@@ -801,26 +816,55 @@ class BotController:
         return battle_vision.crop(frame, region), snapshot
 
     def learn_visible_names(self) -> None:
-        """Marca os nomes visíveis agora na battle list como permitidos."""
+        """Salva como "atacar" os nomes visíveis agora que ainda não estão salvos."""
         region = self.profile["training"]["region"]
         if self.am is None or not region:
             self.log("Selecione a janela e a região da battle list primeiro.")
             return
         frame = self._capture_frame(self.am.hwnd)
-        allowed = self.profile["training"]["allowed_names"]
+        training = self.profile["training"]
+        allowed = training["allowed_names"]
         added = 0
         for row in battle_vision.analyze_battle_list(frame, region).rows:
-            known = any(battle_vision.signatures_match(row.signature, name) for name in allowed)
+            saved = allowed + training["ignored_names"]
+            known = any(battle_vision.signatures_match(row.signature, name) for name in saved)
             if row.signature and not known:
                 allowed.append(row.signature)
                 added += 1
-        self.save()
-        self.log(f"{added} nome(s) novo(s); {len(allowed)} permitido(s) no total.")
+        self._names_changed(f"{added} nome(s) novo(s); {len(allowed)} para atacar no total.")
 
     def clear_allowed_names(self) -> None:
         self.profile["training"]["allowed_names"] = []
+        self.profile["training"]["ignored_names"] = []
+        self._names_changed("Lista de nomes limpa.")
+
+    def set_name_ignored(self, kind: str, index: int, ignored: bool) -> None:
+        """Move um nome salvo entre "atacar" (allowed) e "ignorar" (ignored)."""
+        training = self.profile["training"]
+        source = training[f"{kind}_names"]
+        target = training["ignored_names" if ignored else "allowed_names"]
+        if not 0 <= index < len(source) or source is target:
+            return
+        target.append(source.pop(index))
+        self._names_changed("Nome marcado para ignorar." if ignored else "Nome marcado para atacar.")
+
+    def remove_name(self, kind: str, index: int) -> None:
+        names = self.profile["training"][f"{kind}_names"]
+        if 0 <= index < len(names):
+            del names[index]
+            self._names_changed("Nome removido.")
+
+    def _names_changed(self, message: str) -> None:
         self.save()
-        self.log("Lista de nomes permitidos limpa.")
+        self.events.put(("names", None))
+        self.log(message)
+
+    def capture_heal_rune(self) -> bool:
+        def done(points):
+            self.profile["training"]["heal"]["rune"] = points[0]
+            self.events.put(("names", None))
+            self.log("Runa de cura salva.")
+        return self._begin_capture("Clique na runa de cura", 1, done)
 
     # ---------- status para a UI ----------
 

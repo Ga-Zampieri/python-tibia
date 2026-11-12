@@ -14,6 +14,7 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
 from .app_log import LOG_DIR
+from .battle_vision import signature_image
 from .bot import MODULE_TITLES, MODULES, BotController
 from .loot import decode_sprite, destination_of, destinations
 from .capture import virtual_screen_bounds
@@ -258,34 +259,100 @@ class ExordionApp(ctk.CTk):
             self.rows[name] = (switch, detail)
         return page
 
+    def _segmented(self, card, values, current, on_change):
+        widget = ctk.CTkSegmentedButton(card, values=values, command=on_change, font=font(13),
+                                        selected_color=ACCENT_DARK, selected_hover_color=ACCENT_DARK,
+                                        unselected_color=BG, unselected_hover_color=CARD_HOVER)
+        widget.set(current)
+        self._place(card, widget)
+
     def _page_training(self):
         page = self._detail_page("Treino")
         config = self.bot.profile["training"]
 
-        card = self._section(page, "Tipo de criatura")
-
-        def mode_changed(value):
-            config["mode"] = "summon" if value == "Summon" else "normal"
+        def changed(key, value):
+            config[key] = value
+            self.bot.apply_training_mode()
             self.bot.save()
 
-        mode = ctk.CTkSegmentedButton(card, values=["Summon", "Normal"], command=mode_changed, font=font(13),
-                                      selected_color=ACCENT_DARK, selected_hover_color=ACCENT_DARK,
-                                      unselected_color=BG, unselected_hover_color=CARD_HOVER)
-        mode.set("Summon" if config["mode"] == "summon" else "Normal")
-        self._place(card, mode)
+        card = self._section(
+            page, "Tipo de criatura",
+            "Summon: ataca de cima para baixo até morrer, pulando os ignorados. Com só um bicho "
+            "atacável na lista não ataca: sem summons, ele é o principal.",
+        )
+        self._segmented(card, ["Summon", "Normal"], "Summon" if config["mode"] == "summon" else "Normal",
+                        lambda value: changed("mode", "summon" if value == "Summon" else "normal"))
+
+        card = self._section(
+            page, "Ordem no modo Normal",
+            "Equilibrar vida: abaixo de 50% troca para o bicho com mais vida. "
+            "Topo da lista: o primeiro de cima, até morrer.",
+        )
+        orders = {"Equilibrar vida": "balance", "Topo da lista": "top"}
+        current = next(label for label, value in orders.items() if value == config["normal_order"])
+        self._segmented(card, list(orders), current, lambda value: changed("normal_order", orders[value]))
 
         card = self._section(page, "Battle list", "Fica salva relativa à janela do jogo.")
         self._buttons(card, ("Selecionar região", lambda: self._select_region("battle")),
                       ("Testar captura", self._preview_battle_list))
 
         card = self._section(
-            page, "Nomes permitidos",
-            "Com a lista preenchida, o treino só ataca esses nomes e o Alarme avisa de qualquer outro. "
-            "Deixe só as criaturas certas na battle list e clique em Aprender.",
+            page, "Nomes",
+            "Aprender salva os nomes visíveis para atacar. Depois marque Ignorar nos que o bot não deve "
+            "atacar. Com nomes para atacar, o Alarme avisa de qualquer nome que não esteja salvo.",
         )
         self._buttons(card, ("Aprender visíveis", self.bot.learn_visible_names),
                       ("Limpar", self.bot.clear_allowed_names))
+
+        self.names_list = self._section(page, "Nomes salvos", "É assim que o bot enxerga cada nome.")
+
+        heal = config["heal"]
+        card = self._section(
+            page, "Curar o alvo (modo Normal)",
+            "Usa a runa no bicho que está sendo atacado quando a vida dele cai abaixo do limite, "
+            "para ele durar mais. A runa precisa ficar sempre no mesmo lugar.",
+        )
+        self._check(card, "Curar com runa", heal, "enabled")
+        self._field(card, "Curar abaixo de (%)", heal, "below", int)
+        self._field(card, "Intervalo mínimo (s)", heal, "cooldown", float)
+        self.heal_status = ctk.CTkLabel(card, text="", font=font(12), text_color=MUTED, anchor="w")
+        self._place(card, self.heal_status)
+        self._buttons(card, ("Capturar runa", self.bot.capture_heal_rune))
+
+        self._fill_names()
         return page
+
+    def _fill_names(self):
+        rune = self.bot.profile["training"]["heal"]["rune"]
+        self.heal_status.configure(text="Runa capturada." if rune else "Falta capturar a runa.",
+                                   text_color=TEXT if rune else MUTED)
+        for child in self.names_list.winfo_children()[2:]:  # mantém título e dica
+            child.destroy()
+        training = self.bot.profile["training"]
+        entries = [("allowed", i, s) for i, s in enumerate(training["allowed_names"])]
+        entries += [("ignored", i, s) for i, s in enumerate(training["ignored_names"])]
+        if not entries:
+            self._place(self.names_list, ctk.CTkLabel(
+                self.names_list, text="Nenhum nome salvo: o treino ataca qualquer criatura.",
+                font=font(12), text_color=MUTED, anchor="w"))
+            return
+        for kind, index, signature in entries:
+            pixels = signature_image(signature)
+            if pixels is None:
+                continue
+            ignored = kind == "ignored"
+            row = ctk.CTkFrame(self.names_list, fg_color="transparent")
+            row.columnconfigure(0, weight=1)
+            height, width = pixels.shape[:2]
+            image = ctk.CTkImage(Image.fromarray(pixels), size=(width * 2, height * 2))
+            ctk.CTkLabel(row, text="", image=image, anchor="w").grid(row=0, column=0, sticky="w")
+            ctk.CTkButton(row, text="Ignorando" if ignored else "Atacando", width=86, height=28, font=font(12),
+                          fg_color=DANGER if ignored else ACCENT_DARK, hover_color=LINE, text_color=TEXT,
+                          command=lambda k=kind, i=index, ig=ignored: self.bot.set_name_ignored(k, i, not ig)
+                          ).grid(row=0, column=1, padx=2)
+            self._ghost_button(row, "Remover", lambda k=kind, i=index: self.bot.remove_name(k, i),
+                               width=70).grid(row=0, column=2, padx=(2, 0))
+            self._place(self.names_list, row)
 
     def _page_fishing(self):
         page = self._detail_page("Pesca")
@@ -693,7 +760,7 @@ class ExordionApp(ctk.CTk):
         left, top = self.bot.profile["training"]["region"][:2]
         draw = ImageDraw.Draw(image)
         for row in snapshot.rows:
-            color = ACCENT if row.allowed else DANGER
+            color = ACCENT if row.allowed else MUTED if row.ignored else DANGER
             draw.rectangle((row.bounds[0] - left, row.bounds[1] - top,
                             row.bounds[2] - left - 1, row.bounds[3] - top - 1), outline=color)
         self._show_preview(image, "Prévia da battle list")
@@ -776,6 +843,8 @@ class ExordionApp(ctk.CTk):
                 self._fill_hotkeys()
             elif kind == "loot":
                 self._fill_loot()
+            elif kind == "names":
+                self._fill_names()
             elif kind == "alarm":
                 self._show_banner(f"ALARME: {payload}", DANGER, "OK", self.banner.grid_forget)
                 self.deiconify()

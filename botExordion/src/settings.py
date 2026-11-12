@@ -37,7 +37,11 @@ DEFAULT_PROFILE = {
         "survival": "",
         "rune_maker": "",
     },
-    "training": {"mode": "summon", "region": None, "allowed_names": []},
+    # allowed_names: atacar; ignored_names: nunca atacar. normal_order: "balance" | "top".
+    # heal: runa usada no alvo do modo Normal quando a vida cai abaixo de `below` %.
+    "training": {"mode": "summon", "region": None, "allowed_names": [], "ignored_names": [],
+                 "normal_order": "balance",
+                 "heal": {"enabled": False, "rune": None, "below": 30, "cooldown": 2.0}},
     "fishing": {"rod": None, "waters": []},
     # grid: [left, top, colunas, linhas]; close: o X da janela; items e bags: desenhos aprendidos.
     # destination é a BP 1 e extra_destinations, as seguintes; routes: desenho -> BP, se não for a 1.

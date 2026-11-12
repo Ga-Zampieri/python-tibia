@@ -1,25 +1,45 @@
+from pathlib import Path
+
 import numpy as np
+from PIL import Image
 
 from src import battle_vision
 from src.battle_vision import analyze_battle_list, bar_percent, name_signature, signatures_match
 
-GREEN = (0, 200, 0)
-RED = (220, 30, 30)
-WHITE = (220, 220, 220)
+GREEN = (0, 188, 0)
+RED = (192, 0, 0)
+DARK_RED = (96, 0, 0)
+WHITE = (192, 192, 192)
+BACKGROUND = 30
 REGION = (0, 0, 200, 240)
+TROLLS = Path(__file__).parent / "assets" / "battle_trolls.png"
+TARGET = Path(__file__).parent / "assets" / "battle_target.png"
 
 
-def row(frame, y, color=GREEN, text_seed=0, outline=False):
-    """Desenha uma linha da battle list: nome em cima, barra de HP embaixo."""
-    frame[y + 14:y + 18, 30:130] = color
+def read_print(path, allowed=()):
+    frame = np.array(Image.open(path).convert("RGB"))
+    height, width = frame.shape[:2]
+    return analyze_battle_list(frame, (0, 0, width, height), allowed)
+
+
+def row(frame, y, color=GREEN, text_seed=0, outline=False, percent=100, skull=None):
+    """Desenha uma linha da battle list como o cliente: nome em cima e, embaixo,
+    a barra de HP com moldura preta e o preenchimento proporcional à vida."""
+    frame[y + 13:y + 18, 29:131] = 0
+    frame[y + 14:y + 17, 30:130] = BACKGROUND
+    frame[y + 14:y + 17, 30:30 + percent] = color
     rng = np.random.default_rng(text_seed)
-    frame[y + 2:y + 12, 30:90][rng.random((10, 60)) > 0.6] = WHITE
+    text_left = 30 if skull is None else 45
+    frame[y + 2:y + 12, text_left:text_left + 60][rng.random((10, 60)) > 0.6] = WHITE
+    if skull is not None:
+        frame[y + 2:y + 11, 30:40] = skull
+        frame[y + 4:y + 9, 32:38] = (150, 150, 150)
     if outline:
-        frame[y + 1:y + 2, 0:200] = RED
+        frame[y + 1:y + 2, 0:200] = (220, 30, 30)
 
 
 def blank():
-    return np.zeros((240, 200, 3), dtype=np.uint8)
+    return np.full((240, 200, 3), BACKGROUND, dtype=np.uint8)
 
 
 def test_rows_are_found_with_hp_and_selection():
@@ -42,6 +62,65 @@ def test_region_offset_gives_window_coordinates():
     left, top, right, _ = snapshot.rows[0].bounds
     assert (left, right) == (200, 400)
     assert top > 100
+
+
+def test_hp_percent_and_low_hp_colors():
+    frame = blank()
+    row(frame, 40, color=DARK_RED, percent=5)
+    row(frame, 70, color=(192, 192, 0), percent=40)
+
+    rows = analyze_battle_list(frame, REGION).rows
+
+    assert [item.hp_state for item in rows] == ["red", "yellow"]
+    assert [item.hp_percent for item in rows] == [5.0, 40.0]
+
+
+def test_skull_does_not_create_rows_or_change_the_name():
+    frame = blank()
+    row(frame, 40, text_seed=3)
+    row(frame, 70, text_seed=3, skull=(0, 255, 0))
+    row(frame, 100, text_seed=3, skull=(200, 8, 10))
+
+    rows = analyze_battle_list(frame, REGION).rows
+
+    assert len(rows) == 3
+    assert all(signatures_match(rows[0].signature, item.signature) for item in rows)
+
+
+def test_real_battle_list_with_skulls_and_outfits():
+    """Print do cliente: 7 Trolls, com e sem caveira, outfits diferentes."""
+    snapshot = read_print(TROLLS)
+    rows = snapshot.rows
+
+    assert snapshot.selected_index is None  # caveira vermelha não é alvo
+    assert len(rows) == 7
+    assert all(item.hp_state == "green" for item in rows)
+    assert all(signatures_match(rows[0].signature, item.signature) for item in rows)
+    assert [round(item.hp_percent) for item in rows] == [78, 100, 73, 77, 100, 62, 100]
+
+
+def test_real_battle_list_with_target_selected():
+    """Print do cliente com um Troll sendo atacado: contorno e nome em vermelho."""
+    troll = read_print(TROLLS).rows[0].signature
+
+    snapshot = read_print(TARGET, [troll])
+
+    assert snapshot.selected_index == 0
+    assert [item.hp_state for item in snapshot.rows] == ["green", "yellow"]
+    assert all(item.allowed for item in snapshot.rows)  # nome vermelho continua sendo Troll
+
+
+def test_name_matches_in_any_color():
+    """Cinza normal, branco com o mouse em cima, vermelho/rosa quando é alvo."""
+    signatures = []
+    for color in (WHITE, (255, 255, 255), (255, 0, 0), (255, 128, 128)):
+        frame = blank()
+        row(frame, 40, text_seed=5)
+        text = frame[42:52, 30:90]
+        text[text.max(axis=2) >= 100] = color
+        signatures.append(analyze_battle_list(frame, REGION).rows[0].signature)
+
+    assert all(signatures_match(signatures[0], other) for other in signatures)
 
 
 def test_empty_list_is_not_valid():
@@ -117,3 +196,27 @@ def test_same_image_ignores_noise_and_rejects_other_sizes():
 
     assert battle_vision.same_image(empty, empty + 10) is True
     assert battle_vision.same_image(empty, empty[:20]) is False
+
+
+def test_signature_image_draws_the_saved_name():
+    troll = read_print(TROLLS).rows[0].signature
+    width, height = (int(v) for v in troll.split(":")[0].split("x"))
+
+    image = battle_vision.signature_image(troll)
+
+    assert image.shape == (height + 4, width + 4, 3)
+    assert (image == 220).any() and (image == 30).any()
+    assert battle_vision.signature_image("lixo") is None
+
+
+def test_target_is_found_with_the_mouse_over_it():
+    """Com o mouse em cima, o contorno e o nome do alvo ficam rosa (255,136,136);
+    sem perceber isso o bot clicava de novo e desligava o ataque."""
+    snapshot = read_print(Path(__file__).parent / "assets" / "battle_target_hover.png")
+    assert snapshot.selected_index == 0
+    assert [round(item.hp_percent) for item in snapshot.rows] == [30, 33]
+
+
+def test_mouse_over_without_target_is_not_a_target():
+    snapshot = read_print(Path(__file__).parent / "assets" / "battle_hover.png")
+    assert snapshot.selected_index is None

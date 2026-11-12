@@ -23,7 +23,7 @@ class AlarmMonitor:
             self.baseline = count
 
         if has_allowed_names:
-            unknown = sum(1 for row in snapshot.rows if not row.allowed)
+            unknown = sum(1 for row in snapshot.rows if not row.allowed and not row.ignored)
             message = f"{unknown} nome(s) desconhecido(s) na battle list!" if unknown else None
         elif count > self.baseline:
             message = f"Battle list subiu de {self.baseline} para {count}!"

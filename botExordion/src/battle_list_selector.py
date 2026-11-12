@@ -22,6 +22,10 @@ class BattleListRow:
     # Forma do nome na lista; `allowed` é False se não está na lista de permitidos.
     signature: str = ""
     allowed: bool = True
+    # True se o nome está na lista de ignorados: conhecido, mas não deve ser atacado.
+    ignored: bool = False
+    # Quanto da barra de HP está preenchido (0-100), ou None se não foi lido.
+    hp_percent: Optional[float] = None
 
 
 @dataclass(frozen=True)
