@@ -67,8 +67,23 @@ def test_quick_drag_waits_far_less_and_still_ends_on_the_destination(monkeypatch
     assert am.drag_with_cursor((10, 10), (90, 50), quick=True)
 
     assert am.focused == 0
-    assert waited(events) < 0.2
+    assert waited(events) < 0.35
     assert events.index(down) < events.index((90, 50)) < events.index(up)
+    assert events[-1] == (7, 8)
+
+
+def test_message_drag_keeps_the_real_cursor_on_the_destination(monkeypatch):
+    """O cliente solta onde está o cursor de verdade, então ele espera no destino."""
+    events = []
+    fake_user32(monkeypatch, events)
+    am = manager(foreground=False)
+    am._send = lambda message, wparam, lparam: events.append(("msg", message))
+
+    assert am.drag((10, 10), (90, 50), quick=True)
+
+    up = events.index(("msg", action_manager.win32con.WM_LBUTTONUP))
+    assert events[0] == (90, 50)
+    assert action_manager.DROP_GRACE in events[up:]
     assert events[-1] == (7, 8)
 
 
@@ -275,19 +290,6 @@ def test_auto_mode_uses_messages_only_with_the_game_behind():
     assert not action_manager.use_messages(am, background=False)
     am.is_foreground = lambda: True
     assert not action_manager.use_messages(am, background=True)
-
-
-def test_message_mode_uses_messages_even_with_the_game_in_front():
-    am = manager(foreground=True)
-    am.settings["mode"] = "message"
-    calls = []
-    am.left_click = lambda pos: calls.append(("left", pos)) or True
-    am.drag = lambda start, end, quick=False: calls.append(("drag", start, end)) or True
-
-    action_manager.click_item(am, (1, 2), "left", interface=True)
-    action_manager.drag_item(am, (1, 2), (3, 4), background=False, quick=True)
-
-    assert calls == [("left", (1, 2)), ("drag", (1, 2), (3, 4))]
 
 
 def test_diagnostic_mode_logs_each_action(monkeypatch, caplog):

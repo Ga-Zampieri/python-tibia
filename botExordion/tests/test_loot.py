@@ -40,6 +40,8 @@ class Client(FakeActionManager):
         self.received = []
         self.speeds = []
         self.refuses_quick = False
+        self.by_cursor = 0
+        self.restored = []
 
     def frame(self):
         if not self.window_open:
@@ -66,17 +68,24 @@ class Client(FakeActionManager):
             self.items = list(self.bag_contents)
         return True
 
+    # O loot só usa o cursor. Cada ação pelo cursor vira a ação de mesmo efeito
+    # (drag, left, right), que as subclasses simulam, e fica contada em by_cursor.
     def drag_with_cursor(self, start, end, quick=False):
-        super().drag_with_cursor(start, end)
+        self.by_cursor += 1
         self.speeds.append(quick)
-        if self.can_move and not (quick and self.refuses_quick):
-            self.received.append(self.items.pop(self._index(start)))
-        return True
+        if quick and self.refuses_quick:
+            self.calls.append(("drag", tuple(start), tuple(end)))
+            return True
+        return self.drag(start, end, quick)
 
     def press_with_cursor(self, pos, button):
-        super().press_with_cursor(pos, button)
-        if button == "right" and self.bag_opens:
-            self.items = list(self.bag_contents)
+        self.by_cursor += 1
+        (self.right_click if button == "right" else self.left_click)(pos)
+
+    click_with_cursor = press_with_cursor
+
+    def set_cursor(self, pos):
+        self.restored.append(tuple(pos))
 
 
 CLOSE = [168, 12]
@@ -216,11 +225,12 @@ def test_without_image_it_does_nothing():
 def test_step_limit_ends_a_container_that_never_empties():
     class Endless(Client):
         def drag(self, start, end, quick=False):
+            # Sempre cheio: o que sai anda a fila, e outro item aparece no fim.
             self.calls.append(("drag",))
-            self.items = [ITEM if self.items[0] is GOLD else GOLD]
+            self.items = self.items[1:] + [ITEM if self.items[-1] is GOLD else GOLD]
             return True
 
-    client = Endless([GOLD])
+    client = Endless([GOLD, ITEM, GOLD, ITEM])
     run(looter(client))
     assert len(client.calls) == loot.MAX_STEPS
 
@@ -256,17 +266,16 @@ def test_game_in_front_uses_the_real_cursor_and_gives_it_back():
     maker = run(looter(client, close=CLOSE))
 
     assert maker.taken == 2
-    kinds = [call[0] for call in client.calls]
-    assert "drag" not in kinds and "right" not in kinds and "left" not in kinds
-    assert kinds.count("drag_cursor") == 2
-    assert ("cursor_click", "right", (30, 41)) in client.calls
-    assert client.calls[-2:] == [("cursor_click", "left", tuple(CLOSE)), ("cursor", (3, 4))]
+    assert client.by_cursor == len(client.calls) == 4
+    assert client.calls[-1] == ("left", tuple(CLOSE))
+    assert client.restored[-1] == (3, 4)
 
 
-def test_game_behind_uses_messages():
-    client = Client([GOLD])
-    maker = looter(client, close=CLOSE)
-    run(maker)
+def test_game_behind_still_uses_the_cursor():
+    """Por mensagem o cliente pode soltar o item onde está o mouse da pessoa."""
+    client = Client([GOLD], foreground=False)
+    run(looter(client, close=CLOSE))
+    assert client.by_cursor == len(client.calls) == 2
     assert client.calls == [("drag", (30, 41), (500, 500)), ("left", tuple(CLOSE))]
 
 
@@ -309,11 +318,12 @@ def test_cancelled_loot_keeps_the_window_open():
 def test_step_limit_does_not_close():
     class Endless(Client):
         def drag(self, start, end, quick=False):
+            # Sempre cheio: o que sai anda a fila, e outro item aparece no fim.
             self.calls.append(("drag",))
-            self.items = [ITEM if self.items[0] is GOLD else GOLD]
+            self.items = self.items[1:] + [ITEM if self.items[-1] is GOLD else GOLD]
             return True
 
-    client = Endless([GOLD])
+    client = Endless([GOLD, ITEM, GOLD, ITEM])
     run(looter(client, close=CLOSE))
     assert ("left", tuple(CLOSE)) not in client.calls
 
@@ -490,6 +500,40 @@ def test_failed_drag_is_tried_once_and_the_corpse_is_left():
     assert not any(call[0] == "cursor_click" for call in client.calls)
 
 
+def test_item_dropped_inside_the_corpse_stops_the_loot():
+    """Caiu em outro slot da própria janela: a ordem muda sem o item sair."""
+    class Shuffles(Client):
+        def drag(self, start, end, quick=False):
+            self.calls.append(("drag",))
+            self.items = [self.items[1], self.items[0]] + self.items[2:]
+            return True
+
+    client = Shuffles([GOLD, BAG])
+    maker = run(looter(client, close=CLOSE))
+
+    assert [call[0] for call in client.calls] == ["drag"]
+    assert maker.taken == 0
+    assert "própria janela" in maker.alerts[0]
+
+
+def test_stack_that_leaves_in_part_stops_like_a_full_backpack():
+    """Sem cap para tudo: só o número da pilha muda, e isso não conta como mexer."""
+    smaller = GOLD.copy()
+    smaller[19:29, 12:31] = (240, 240, 240)
+
+    class Partial(Client):
+        def drag(self, start, end, quick=False):
+            self.calls.append(("drag",))
+            self.items[0] = smaller
+            return True
+
+    client = Partial([GOLD])
+    maker = run(looter(client, items=(GOLD,)))
+
+    assert [call[0] for call in client.calls] == ["drag"]
+    assert "Sem cap" in maker.alerts[0]
+
+
 def test_a_failure_does_not_slow_down_the_next_corpse():
     client = Client([GOLD], foreground=True)
     client.refuses_quick = True
@@ -617,3 +661,28 @@ def test_old_list_without_routes_still_imports():
     mine = config_with()
     old = {"format": loot.LIST_FORMAT, "version": 1, "items": config_with([GOLD])["items"], "bags": []}
     assert loot.import_list(mine, old) == 1
+
+
+# Prints reais: o corpo abriu 3 px abaixo da grade salva, com uma fileira só e o
+# painel vazio embaixo ocupando a segunda fileira da grade.
+OFFSET_GRID = [56, 81, 4, 2]
+OFFSET_FULL = np.asarray(Image.open(Path(__file__).parent / "assets" / "loot_corpse_offset.png").convert("RGB"))
+OFFSET_EMPTY = np.asarray(Image.open(Path(__file__).parent / "assets" / "loot_corpse_offset_empty.png").convert("RGB"))
+
+
+def test_corpse_a_few_pixels_off_the_grid_still_counts_as_open():
+    assert loot.window_open(OFFSET_EMPTY, OFFSET_GRID)
+    assert loot.window_open(OFFSET_FULL, OFFSET_GRID)
+
+
+def test_taking_from_a_one_row_corpse_is_not_a_misplaced_drop():
+    before = loot.read_view(OFFSET_FULL, OFFSET_GRID)
+    after = loot.read_view(OFFSET_EMPTY, OFFSET_GRID)
+    assert not loot.is_empty(before[0].pixels)
+    assert loot.item_left(before, after, 0)
+
+
+def test_empty_panel_is_not_an_open_window():
+    panel = OFFSET_EMPTY.copy()
+    panel[:] = OFFSET_EMPTY[-5, 5]
+    assert not loot.window_open(panel, OFFSET_GRID)

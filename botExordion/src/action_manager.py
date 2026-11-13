@@ -27,12 +27,16 @@ GUARD_TIMEOUT = 1.5
 PRIORITIES = {"heal": 0, "macro": 1, "loot": 2, "repeater": 3, "normal": 4, "rune_maker": 5, "fishing": 6}
 LLMHF_ANY_INJECTED = 0x1 | 0x2
 MOUSE_UP_FLAGS = {0x0202: 0x0004, 0x0205: 0x0010, 0x0208: 0x0040}  # mensagem do soltar -> mouse_event
-DEFAULT_INPUT = {"mode": "auto", "pause_ms": 30, "server_wait": 2.0, "diagnostic": False}
+DEFAULT_INPUT = {"pause_ms": 30, "server_wait": 2.0, "diagnostic": False}
 GA_ROOT = 2
 MOUSEEVENTF_MOVE = 0x0001
 QUICK_PAUSE = 0.03  # uns dois quadros do cliente: menos que isso ele pode não ver o passo
 QUICK_STEPS = 4
 QUICK_DURATION = 0.04
+# O cliente pode ler o botão e a posição um ou dois quadros depois: antes disso o
+# cursor não volta para onde estava, senão o item cai lá.
+DROP_GRACE = 0.08
+QUICK_MIN_STEP = 0.05  # o aperto precisa ser visto ainda em cima do item
 MOUSE_FLAGS = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
@@ -200,10 +204,7 @@ class MouseBlocker:
 
 def use_messages(am, background: bool) -> bool:
     """Mensagem não mexe no cursor nem precisa de foco, mas com o jogo na frente
-    o cliente pode lê-la errado. "auto" usa mensagem só com o jogo atrás;
-    "message" usa sempre, depois de o Testar input provar que funciona."""
-    if am.input_mode == "message":
-        return True
+    o cliente pode lê-la errado: por isso só vale com o jogo atrás."""
     return background and not am.is_foreground()
 
 
@@ -281,10 +282,6 @@ class ActionManager:
     def configure(self, settings: dict) -> None:
         """Liga ao bloco "input" do perfil: mudanças na tela valem na hora."""
         self.settings = settings
-
-    @property
-    def input_mode(self) -> str:
-        return self.settings.get("mode", "auto")
 
     @property
     def diagnostic(self) -> bool:
@@ -408,15 +405,22 @@ class ActionManager:
         return self._click(pos, win32con.WM_RBUTTONDOWN, win32con.WM_RBUTTONUP, win32con.MK_RBUTTON)
 
     def drag(self, start, end, steps: int = 12, duration: float = 0.2, quick: bool = False) -> bool:
-        """Arrasta por mensagens, sem foco e sem mexer no cursor real."""
+        """Arrasta por mensagens, sem foco.
+
+        O cliente solta o item onde está o cursor de verdade, e não onde a
+        mensagem diz. Por isso o cursor fica parado em cima do destino durante o
+        arrasto e só volta depois que o cliente viu o soltar."""
         sx, sy = int(start[0]), int(start[1])
         ex, ey = int(end[0]), int(end[1])
         settle, hold = (self.pause, self.pause) if quick else (0.05, 0.08)
         if quick:
             steps, duration = QUICK_STEPS, QUICK_DURATION
         pressed = False
+        original = None
         try:
             with self.lock:
+                original = self.get_cursor()
+                self.set_cursor(self.client_to_screen((ex, ey)))
                 self._send(win32con.WM_MOUSEMOVE, 0, make_lparam(sx, sy))
                 time.sleep(settle)
                 self._send(win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, make_lparam(sx, sy))
@@ -430,6 +434,8 @@ class ActionManager:
                 time.sleep(settle)
                 self._send(win32con.WM_LBUTTONUP, 0, make_lparam(ex, ey))
                 pressed = False
+                self._send(win32con.WM_MOUSEMOVE, 0, make_lparam(ex, ey))
+                time.sleep(DROP_GRACE)
             return True
         except Exception as exc:
             logger.error("Erro durante o arrasto: %s", exc)
@@ -438,6 +444,9 @@ class ActionManager:
             if pressed:  # nunca deixa o botão "preso" no cliente
                 with contextlib.suppress(Exception):
                     self._send(win32con.WM_LBUTTONUP, 0, make_lparam(ex, ey))
+            if original is not None:
+                with contextlib.suppress(Exception):
+                    self.set_cursor(original)
 
     # ---------- mouse pelo cursor real (exige o jogo na frente) ----------
 
@@ -493,8 +502,11 @@ class ActionManager:
     def drag_with_cursor(self, start, end, steps: int = 12, duration: float = 0.2, quick: bool = False) -> bool:
         """Plano B para clientes que leem o cursor real: traz o jogo para frente.
 
-        quick corta as esperas para perto do que a macro de runa usa."""
-        settle, hold, release = (self.pause,) * 3 if quick else (0.08, 0.10, 0.08)
+        quick corta as esperas para perto do que a macro de runa usa, mas cada
+        passo ainda dura o bastante para o cliente ver: rápido demais ele pega o
+        item errado no caminho ou solta onde o cursor voltou."""
+        step = max(self.pause, QUICK_MIN_STEP)
+        settle, hold, release = (step,) * 3 if quick else (0.08, 0.10, 0.08)
         if quick:
             steps, duration = QUICK_STEPS, QUICK_DURATION
         mouse_event = ctypes.windll.user32.mouse_event
@@ -518,7 +530,7 @@ class ActionManager:
                 time.sleep(release)
                 mouse_event(left_up, 0, 0, 0, 0)
                 pressed = False
-                time.sleep(self.pause if quick else 0.10)
+                time.sleep(DROP_GRACE if quick else 0.10)
             return True
         except Exception as exc:
             logger.error("Erro durante o arrasto com cursor: %s", exc)

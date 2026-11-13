@@ -20,10 +20,6 @@ class FakeActionManager:
         self.settings = settings
 
     @property
-    def input_mode(self):
-        return self.settings.get("mode", "auto")
-
-    @property
     def diagnostic(self):
         return bool(self.settings.get("diagnostic"))
 

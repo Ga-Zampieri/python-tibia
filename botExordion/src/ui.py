@@ -39,7 +39,6 @@ def font(size=13, weight="normal"):
 
 
 LOOT_FILES = (("Lista de loot", "*.json"),)
-INPUT_LABELS = {"auto": "Automático", "message": "Só mensagem"}
 
 
 def covering_rects(hwnds):
@@ -707,20 +706,11 @@ class ExordionApp(ctk.CTk):
 
         card = self._section(
             page, "Input",
-            "Automático: com o jogo atrás, mensagem; na frente, o cursor, que o cliente sempre aceita. "
-            "Só mensagem nunca mexe no seu mouse, mas só vale se o Testar input aprovar.")
+            "Com o jogo atrás, mensagem; na frente, o cursor. O loot usa sempre o cursor.")
         settings = self.bot.profile["input"]
-        modes = {"Automático": "auto", "Só mensagem": "message"}
-
-        def mode_changed(label):
-            settings["mode"] = modes[label]
-            self.bot.save()
-
-        self.input_mode = self._segmented(card, list(modes), INPUT_LABELS[settings["mode"]], mode_changed)
         self._field(card, "Pausa entre passos (ms)", settings, "pause_ms", int)
         self._field(card, "Espera do servidor (s)", settings, "server_wait", float)
         self._check(card, "Diagnóstico: registrar cada ação no log", settings, "diagnostic")
-        self._buttons(card, ("Testar input", self.bot.test_input))
 
         card = self._section(page, "Diagnóstico")
         self._buttons(card, ("Abrir pasta de logs", lambda: os.startfile(LOG_DIR)))
@@ -933,8 +923,6 @@ class ExordionApp(ctk.CTk):
                 self._show_banner(f"ALARME: {payload}", DANGER, "OK", self.banner.grid_forget)
                 self.deiconify()
                 self.lift()
-            elif kind == "input":
-                self.input_mode.set(INPUT_LABELS[self.bot.profile["input"]["mode"]])
             elif kind == "warning":
                 self._show_banner(payload, DANGER, "OK", self.banner.grid_forget)
 

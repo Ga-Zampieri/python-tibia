@@ -56,9 +56,8 @@ DEFAULT_PROFILE = {
     "overlay": {"enabled": True, "corner": "left"},
     # Bot grudado no jogo: acompanha a janela e vem para frente com ela; offset em pixels.
     "follow_game": {"enabled": True, "offset": None},
-    # mode: "auto" (mensagem só com o jogo atrás) ou "message" (sempre, se o teste aprovar).
     # pause_ms: um quadro do cliente; server_wait: quanto esperar o servidor mover um item.
-    "input": {"mode": "auto", "pause_ms": 30, "server_wait": 2.0, "diagnostic": False},
+    "input": {"pause_ms": 30, "server_wait": 2.0, "diagnostic": False},
     "survival": {
         "hp_bar": None,
         "mana_bar": None,

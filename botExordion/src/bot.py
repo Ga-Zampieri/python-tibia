@@ -35,7 +35,6 @@ BATTLE_SCAN_SECONDS = 1.5
 BARS_SCAN_SECONDS = 0.5
 WINDOW_SCAN_SECONDS = 2.0
 CAPTURE_TIMEOUT_SECONDS = 30
-INPUT_TEST_WAIT = 15
 SLOT_RADIUS = 12
 
 MODULES = (
@@ -638,73 +637,6 @@ class BotController:
             for area in areas)
         logger.info("Captura rápida %s.", "ligada" if self._fast_capture else "desligada: a tela difere do jogo")
         return full
-
-    # ---------- teste de input ----------
-
-    def test_input(self) -> bool:
-        """Descobre se o arraste por mensagem funciona com o jogo na frente."""
-        if self.am is None or not self.profile["loot"]["grid"]:
-            self.log("Teste de input: conecte o jogo e selecione os slots do loot primeiro.")
-            return False
-        self._in_background(self._run_input_test)
-        return True
-
-    def _run_input_test(self) -> None:
-        am = self.am
-        self.log("Teste de input: deixe nos slots do loot uma mochila com um item sem valor e um slot vazio, "
-                 f"e clique no jogo ({INPUT_TEST_WAIT} s).")
-        deadline = time.monotonic() + INPUT_TEST_WAIT
-        while not am.is_foreground():
-            if time.monotonic() > deadline or self._shutdown.is_set():
-                self.log("Teste de input: o jogo não veio para frente. Nada foi testado.")
-                return
-            time.sleep(0.2)
-        time.sleep(0.5)  # o clique que trouxe o jogo para frente termina
-        with priority("macro"):
-            by_message = self._test_drag(am, messages=True)
-            if by_message is None:
-                return
-            by_cursor = by_message or self._test_drag(am, messages=False)
-        settings = self.profile["input"]
-        if by_message:
-            settings["mode"] = "message"
-            self.log("Teste de input: o arraste por mensagem funcionou com o jogo na frente. Passei para Só mensagem.")
-        elif by_cursor:
-            settings["mode"] = "auto"
-            self.log("Teste de input: por mensagem o item não se mexeu com o jogo na frente; pelo cursor, sim. "
-                     "Fica no Automático.")
-        else:
-            self.log("Teste de input: o item não se mexeu de nenhum jeito. Ele é movível e a mochila tem espaço?")
-        self.save()
-        self.events.put(("input", None))
-
-    def _test_drag(self, am, messages: bool):
-        """True se o item andou, False se não, None se não deu para testar."""
-        grid = self.profile["loot"]["grid"]
-        frame = self._game_frame()
-        view = loot.read_view(frame, grid) if frame is not None else []
-        item = next((slot for slot in view if not loot.is_empty(slot.pixels)), None)
-        empty = next((slot for slot in view if loot.is_empty(slot.pixels)), None)
-        if item is None or empty is None:
-            self.log("Teste de input: preciso de um item e de um slot vazio nos slots do loot.")
-            return None
-        start = (item.left + loot.SLOT // 2, item.top + item.pixels.shape[0] // 2)
-        end = (empty.left + loot.SLOT // 2, empty.top + empty.pixels.shape[0] // 2)
-        with am.guarded() as held:
-            if not held:
-                self.log("Teste de input: não foi possível segurar o mouse.")
-                return None
-            if messages:
-                am.drag(start, end, quick=True)
-            else:
-                am.drag_with_cursor(start, end, quick=True)
-        deadline = time.monotonic() + float(self.profile["input"]["server_wait"])
-        while time.monotonic() < deadline:
-            time.sleep(0.05)
-            after = self._game_frame()
-            if after is not None and loot.view_changed(view, loot.read_view(after, grid)):
-                return True
-        return False
 
     def _raise_alarm(self, message: str) -> None:
         if self.profile["alarm"]["pause_modules"]:

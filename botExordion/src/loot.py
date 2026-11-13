@@ -30,6 +30,8 @@ PIXEL_TOLERANCE = 30
 CHANGED_PIXELS_LIMIT = 0.02
 MAX_STEPS = 40
 CHANGE_CHECK_SECONDS = 0.05
+WINDOW_SLACK = 6  # pixels que a janela do corpo pode estar fora da grade salva
+STABLE_READS = 2  # leituras iguais seguidas para a janela contar como parada
 SCROLL_SECONDS = 0.6  # a rolagem é local e não espera o servidor
 VIEW_ABOVE = 5  # a área rolável começa acima do primeiro slot
 VIEW_BELOW = 1  # e termina na moldura da janela, antes do fim do último vão
@@ -107,9 +109,14 @@ def row_shift(frame, grid):
 
 
 def window_open(frame, grid, scrolled: bool = False) -> bool:
-    """Confere se há um container nos slots, para o X nunca cair em outra janela."""
+    """Confere se há um container nos slots, para o X nunca cair em outra janela.
+
+    O corpo pode abrir uns pixels acima ou abaixo de onde a grade foi salva
+    (as janelas de cima mudam de altura), então aceita uma folga pequena."""
     shift = row_shift(frame, grid)
-    return shift is not None if scrolled else shift == 0
+    if shift is None:
+        return False
+    return scrolled or min(shift, PITCH - shift) <= WINDOW_SLACK
 
 
 def read_slots(frame, grid) -> list:
@@ -256,6 +263,24 @@ def view_changed(before, after) -> bool:
                for a, b in zip(before, after))
 
 
+def item_left(before, after, index: int) -> bool:
+    """O item do slot `index` saiu da janela e o resto só andou uma casa.
+
+    O container não deixa buracos: o que vinha depois anda uma casa para trás.
+    Se um item aparece fora dessa ordem, o arrastado caiu dentro da própria
+    janela. A comparação para no primeiro slot vazio: dali em diante pode ser
+    só o painel embaixo de um corpo pequeno, que não faz parte do container."""
+    if len(before) != len(after):
+        return True  # a janela mudou de tamanho; não dá para julgar pela ordem
+    for old, new in zip(before[index + 1:], after[index:]):
+        if is_empty(new.pixels):
+            return True
+        if old.pixels.shape == new.pixels.shape and not same_item(new.pixels, old.pixels):
+            # O mesmo item no lugar (same_item ignora o número da pilha) não é bagunça.
+            return same_item(after[index].pixels, before[index].pixels) if new is after[index] else False
+    return True
+
+
 class Looter:
     def __init__(self, profile: dict, log=logger.info, get_frame=lambda: None, alert=None):
         self.am = None
@@ -348,6 +373,26 @@ class Looter:
                 return True
         return False
 
+    def _settled(self, view):
+        """Espera a janela parar de mudar e devolve como ela ficou (None se pararam).
+
+        Logo depois do arrasto o cliente ainda está redesenhando; decidir o
+        próximo item numa imagem no meio do caminho faz pegar o slot errado."""
+        same = 0
+        for _ in self._checks(self._server_wait()):
+            if self._stop_event.wait(CHANGE_CHECK_SECONDS):
+                return None
+            after = self._read()
+            if after is None:
+                return None
+            if view_changed(view, after):
+                view, same = after, 0
+            else:
+                same += 1
+                if same >= STABLE_READS:
+                    break
+        return view
+
     def _give_up(self, message: str) -> bool:
         self._stop_event.set()
         self.alert(message)
@@ -362,21 +407,29 @@ class Looter:
             return bool(action())
 
     def _click(self, pos, button: str) -> bool:
-        return self._act(lambda: click_item(self.am, pos, button, background=True, interface=True))
+        # Loot sempre pelo cursor: por mensagem o cliente pode soltar onde está o seu mouse.
+        return self._act(lambda: click_item(self.am, pos, button, background=False, interface=True))
 
     def _take(self, slot, view) -> bool:
         start = self._center(slot)
         sprite = match(slot.pixels, self.config["items"], slot.skip)
         end = destinations(self.config)[destination_of(self.config, sprite)]
-        background = self.profile["drag_in_background"]
-        moved = self._act(lambda: drag_item(self.am, start, end, background, quick=True))
+        moved = self._act(lambda: drag_item(self.am, start, end, background=False, quick=True))
         changed = self._wait_change(view) if moved else None
         if changed is False:
             # Uma tentativa só: o corpo fica para trás, aberto, e o próximo aperto começa do zero.
             return self._give_up("Loot: um item não saiu do lugar e deixei esse corpo. Sem cap ou mochila cheia?")
-        if changed:
-            self.taken += 1
-        return bool(changed)
+        if not changed:
+            return False
+        after = self._settled(view)
+        if after is None:
+            return False
+        index = next(i for i, other in enumerate(view) if other is slot)
+        if not item_left(view, after, index):
+            return self._give_up("Loot parou: o item caiu em outro lugar da própria janela. "
+                                 "Parei para não bagunçar o resto.")
+        self.taken += 1
+        return True
 
     def _open(self, slot, view) -> bool:
         if not self._click(self._center(slot), "right"):
