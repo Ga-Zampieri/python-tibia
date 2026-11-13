@@ -5,6 +5,7 @@ daqui toca em widget.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import queue
@@ -13,10 +14,10 @@ import time
 from pathlib import Path
 
 from . import battle_vision, loot
-from .action_manager import ActionManager, key_to_vk
+from .action_manager import PRIORITIES, ActionManager, key_to_vk, priority
 from .alarm import AlarmMonitor
 from .auto_hotkey import AutoHotkey
-from .capture import capture_client
+from .capture import capture_client, grab_visible_areas
 from .click_capture import ClickCapture
 from .fishing import Pesca
 from .hotkey_service import HotkeyService, combo_name
@@ -34,6 +35,8 @@ BATTLE_SCAN_SECONDS = 1.5
 BARS_SCAN_SECONDS = 0.5
 WINDOW_SCAN_SECONDS = 2.0
 CAPTURE_TIMEOUT_SECONDS = 30
+INPUT_TEST_WAIT = 15
+SLOT_RADIUS = 12
 
 MODULES = (
     ("training", "Treino"),
@@ -55,9 +58,13 @@ def beep() -> None:
 
 
 class BotController:
-    def __init__(self, store=None, capture=capture_client, list_windows=getWindows):
+    def __init__(self, store=None, capture=capture_client, list_windows=getWindows, grab=grab_visible_areas):
         self.store = store or ProfileStore()
         self._capture_frame = capture
+        self._grab = grab
+        self._fast_capture = None  # None: ainda não conferida neste jogo
+        # Janelas do próprio bot (a UI preenche): a captura rápida não pode lê-las.
+        self.covering_windows = lambda: []
         self._list_windows = list_windows
         self.events = queue.Queue()
         self.am = None
@@ -74,7 +81,8 @@ class BotController:
         self._hotkey_target = None
         self._toggle_lock = threading.Lock()
 
-        self._actions = queue.Queue(maxsize=8)
+        self._actions = queue.PriorityQueue(maxsize=16)
+        self._tickets = itertools.count()
         self._shutdown = threading.Event()
         self._next_battle = 0.0
         self._next_bars = 0.0
@@ -91,9 +99,26 @@ class BotController:
     # ---------- ciclo de vida ----------
 
     def start(self) -> None:
+        if self._another_instance():
+            message = ("Outro Exordion já está aberto. Os dois respondem às mesmas hotkeys e, no mesmo "
+                       "perfil, um apaga o que o outro salva.")
+            self.log(message)
+            self.events.put(("warning", message))
         self._hotkeys.start()
         threading.Thread(target=self._action_loop, daemon=True, name="acoes").start()
         threading.Thread(target=self._vision_loop, daemon=True, name="visao").start()
+
+    def _another_instance(self) -> bool:
+        try:
+            import win32api
+            import win32event
+            import winerror
+            # O handle fica guardado: o nome existe enquanto este bot estiver aberto.
+            self._instance_mutex = win32event.CreateMutex(None, False, "Local\\Exordion")
+            return win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
+        except Exception:
+            logger.exception("Não deu para conferir outras cópias abertas")
+            return False
 
     def shutdown(self) -> None:
         self.stop_all(announce=False)
@@ -109,7 +134,11 @@ class BotController:
         self.events.put(("prompt", text))
 
     def save(self) -> None:
-        self.store.save(self.profile_name, self.profile)
+        try:
+            self.store.save(self.profile_name, self.profile)
+        except OSError as exc:
+            logger.exception("Falha ao salvar o perfil")
+            self.log(f"Não consegui salvar o perfil agora ({exc.strerror or exc}). Salvo na próxima mudança.")
 
     # ---------- perfis ----------
 
@@ -121,10 +150,11 @@ class BotController:
         self.machine = TrainingStateMachine(mode=TrainingMode(profile["training"]["mode"]))
         self.planner = AttackPlanner(self.machine)
         self.healer = HealPlanner()
-        self.survival = Survival(profile["survival"], self.run_action)
+        self.survival = Survival(profile["survival"], self._queue_heal)
         self.rune_maker = RuneMaker(profile["rune_maker"], lambda: self.mana, self.log,
-                                    get_frame=self._game_frame, alert=self._notify)
-        self.looter = loot.Looter(profile, self.log, get_frame=self._game_frame, alert=self._notify)
+                                    get_frame=lambda: self._game_frame([self._hand_area()]), alert=self._notify)
+        self.looter = loot.Looter(profile, self.log, alert=self._notify,
+                                  get_frame=lambda: self._game_frame([loot.capture_area(self.profile["loot"]["grid"])]))
         self._set_action_manager(self.am)
         self.store.remember_last(name)
 
@@ -204,6 +234,9 @@ class BotController:
 
     def _set_action_manager(self, am) -> None:
         self.am = am
+        self._fast_capture = None
+        if am is not None:
+            am.configure(self.profile["input"])
         for module in (self.macros, self.fishing, self.survival, self.rune_maker, self.looter):
             module.am = am
 
@@ -329,22 +362,41 @@ class BotController:
         self.save()
         self.events.put(("hotkeys", None))
 
-    def _enqueue(self, key: str) -> None:
+    def queue_action(self, level: str, label: str, action) -> bool:
+        """Põe na fila única de ações: a de maior prioridade sai primeiro."""
         try:
-            self._actions.put_nowait(key)
+            self._actions.put_nowait((PRIORITIES[level], next(self._tickets), level, label, action))
+            return True
         except queue.Full:
-            logger.debug("Fila de ações cheia; ignorando %s", key)
+            logger.debug("Fila de ações cheia; ignorando %s", label)
+            return False
+
+    def _enqueue(self, key: str) -> None:
+        self.queue_action("macro", key, lambda: self.macros.execute(key))
+
+    def _queue_heal(self, action: str) -> bool:
+        """Regras da Sobrevivência: na frente de tudo, e sem travar a leitura da tela."""
+        return self.queue_action("heal", action, lambda: self.run_action(action))
+
+    def run_next_action(self, timeout: float = 0.5) -> bool:
+        try:
+            _, _, level, label, action = self._actions.get(timeout=timeout)
+        except queue.Empty:
+            return False
+        try:
+            with priority(level):
+                action()
+        except Exception:
+            logger.exception("Erro ao executar %s", label)
+        return True
 
     def _action_loop(self) -> None:
         while not self._shutdown.is_set():
-            try:
-                key = self._actions.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            try:
-                self.macros.execute(key)
-            except Exception:
-                logger.exception("Erro ao executar a macro %s", key)
+            self.run_next_action()
+
+    def _repeat(self, key: str) -> bool:
+        with priority("repeater"):
+            return self.run_action(key)
 
     def run_action(self, action: str) -> bool:
         """Executa uma macro salva, uma tecla no jogo ou, senão, fala o texto."""
@@ -456,7 +508,7 @@ class BotController:
             self.log(f"Tecla inválida no repetidor: {key!r}")
             return False
         try:
-            return self.repeater.start(key, config["interval"], self.run_action)
+            return self.repeater.start(key, config["interval"], self._repeat)
         except ValueError as exc:
             self.log(str(exc))
             return False
@@ -506,13 +558,18 @@ class BotController:
         scan_battle = (self.training_on or self.alarm_on) and now >= self._next_battle
         scan_bars = self._needs_bars() and now >= self._next_bars
         if scan_battle or scan_bars:
-            frame = self._capture_frame(self.am.hwnd)
+            survival = self.profile["survival"]
+            areas = []
+            if scan_battle:
+                areas.append(self.profile["training"]["region"])
+            if scan_bars:
+                areas += [survival["hp_bar"], survival["mana_bar"]]
+            frame = self._game_frame(areas)
             if scan_battle:
                 self._next_battle = now + BATTLE_SCAN_SECONDS
                 self._scan_battle(frame, now)
             if scan_bars:
                 self._next_bars = now + BARS_SCAN_SECONDS
-                survival = self.profile["survival"]
                 self.hp = battle_vision.bar_percent(frame, survival["hp_bar"])
                 self.mana = battle_vision.bar_percent(frame, survival["mana_bar"])
         if self.survival_on:
@@ -546,12 +603,108 @@ class BotController:
     def _heal_target(self, snapshot, now: float) -> None:
         heal = self.profile["training"]["heal"]
         pos, reason = self.healer.plan(snapshot, now, heal)
-        if pos is not None and self.macros.use_rune_on(heal["rune"], pos, "cura"):
+        if pos is not None:
             logger.info(reason)
+            self.queue_action("macro", "cura do alvo", lambda: self.macros.use_rune_on(heal["rune"], pos, "cura"))
 
-    def _game_frame(self):
+    def _hand_area(self):
+        hand = self.profile["rune_maker"]["hand"]
+        return (hand[0] - SLOT_RADIUS, hand[1] - SLOT_RADIUS, SLOT_RADIUS * 2, SLOT_RADIUS * 2) if hand else None
+
+    def _game_frame(self, areas=None):
+        """Imagem do jogo. Com `areas`, tenta ler só esses pedaços da tela (1 a 2 ms
+        cada, contra uns 50 ms da captura completa). Fora deles o frame é preto."""
         am = self.am
-        return self._capture_frame(am.hwnd) if am is not None else None
+        if am is None:
+            return None
+        areas = [area for area in areas or () if area]
+        if areas and self._fast_capture is not False:
+            fast = self._grab(am.hwnd, areas, self.covering_windows())
+            if fast is not None:
+                if self._fast_capture:
+                    return fast
+                return self._check_fast_capture(am, areas, fast)
+        return self._capture_frame(am.hwnd)
+
+    def _check_fast_capture(self, am, areas, fast):
+        """Na primeira vez, compara com a captura completa. Com a tela em escala
+        diferente de 100%, por exemplo, a tela mostra o jogo esticado e os desenhos
+        aprendidos deixariam de bater: aí a captura rápida fica desligada."""
+        full = self._capture_frame(am.hwnd)
+        if full is None:
+            return None
+        self._fast_capture = all(
+            battle_vision.same_image(battle_vision.crop(full, area), battle_vision.crop(fast, area))
+            for area in areas)
+        logger.info("Captura rápida %s.", "ligada" if self._fast_capture else "desligada: a tela difere do jogo")
+        return full
+
+    # ---------- teste de input ----------
+
+    def test_input(self) -> bool:
+        """Descobre se o arraste por mensagem funciona com o jogo na frente."""
+        if self.am is None or not self.profile["loot"]["grid"]:
+            self.log("Teste de input: conecte o jogo e selecione os slots do loot primeiro.")
+            return False
+        self._in_background(self._run_input_test)
+        return True
+
+    def _run_input_test(self) -> None:
+        am = self.am
+        self.log("Teste de input: deixe nos slots do loot uma mochila com um item sem valor e um slot vazio, "
+                 f"e clique no jogo ({INPUT_TEST_WAIT} s).")
+        deadline = time.monotonic() + INPUT_TEST_WAIT
+        while not am.is_foreground():
+            if time.monotonic() > deadline or self._shutdown.is_set():
+                self.log("Teste de input: o jogo não veio para frente. Nada foi testado.")
+                return
+            time.sleep(0.2)
+        time.sleep(0.5)  # o clique que trouxe o jogo para frente termina
+        with priority("macro"):
+            by_message = self._test_drag(am, messages=True)
+            if by_message is None:
+                return
+            by_cursor = by_message or self._test_drag(am, messages=False)
+        settings = self.profile["input"]
+        if by_message:
+            settings["mode"] = "message"
+            self.log("Teste de input: o arraste por mensagem funcionou com o jogo na frente. Passei para Só mensagem.")
+        elif by_cursor:
+            settings["mode"] = "auto"
+            self.log("Teste de input: por mensagem o item não se mexeu com o jogo na frente; pelo cursor, sim. "
+                     "Fica no Automático.")
+        else:
+            self.log("Teste de input: o item não se mexeu de nenhum jeito. Ele é movível e a mochila tem espaço?")
+        self.save()
+        self.events.put(("input", None))
+
+    def _test_drag(self, am, messages: bool):
+        """True se o item andou, False se não, None se não deu para testar."""
+        grid = self.profile["loot"]["grid"]
+        frame = self._game_frame()
+        view = loot.read_view(frame, grid) if frame is not None else []
+        item = next((slot for slot in view if not loot.is_empty(slot.pixels)), None)
+        empty = next((slot for slot in view if loot.is_empty(slot.pixels)), None)
+        if item is None or empty is None:
+            self.log("Teste de input: preciso de um item e de um slot vazio nos slots do loot.")
+            return None
+        start = (item.left + loot.SLOT // 2, item.top + item.pixels.shape[0] // 2)
+        end = (empty.left + loot.SLOT // 2, empty.top + empty.pixels.shape[0] // 2)
+        with am.guarded() as held:
+            if not held:
+                self.log("Teste de input: não foi possível segurar o mouse.")
+                return None
+            if messages:
+                am.drag(start, end, quick=True)
+            else:
+                am.drag_with_cursor(start, end, quick=True)
+        deadline = time.monotonic() + float(self.profile["input"]["server_wait"])
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            after = self._game_frame()
+            if after is not None and loot.view_changed(view, loot.read_view(after, grid)):
+                return True
+        return False
 
     def _raise_alarm(self, message: str) -> None:
         if self.profile["alarm"]["pause_modules"]:
@@ -573,12 +726,15 @@ class BotController:
             return False
         self.cancel_capture()
         self._emit_prompt(prompt)
+        capture = None
 
         def on_point(captured):
             if count > 1:
                 self._emit_prompt(f"{prompt} ({captured}/{count})")
 
         def finished(points):
+            if self._click_capture is not capture:
+                return  # outra captura tomou o lugar: a faixa e o Cancelar já são dela
             self._click_capture = None
             self._emit_prompt(None)
             if points:
@@ -587,8 +743,9 @@ class BotController:
             else:
                 self.log("Captura cancelada: nenhum clique no jogo.")
 
-        self._click_capture = ClickCapture(self.am, count, CAPTURE_TIMEOUT_SECONDS, on_point, finished)
-        self._click_capture.start()
+        capture = ClickCapture(self.am, count, CAPTURE_TIMEOUT_SECONDS, on_point, finished)
+        self._click_capture = capture
+        capture.start()
         return True
 
     def cancel_capture(self) -> None:
@@ -865,6 +1022,24 @@ class BotController:
             self.events.put(("names", None))
             self.log("Runa de cura salva.")
         return self._begin_capture("Clique na runa de cura", 1, done)
+
+    # ---------- painel sobre o jogo ----------
+
+    def overlay_state(self, status=None):
+        """Onde e o que o painel mostra, ou None para escondê-lo.
+
+        Só com o jogo na frente: por cima de outro programa o painel atrapalharia."""
+        config = self.profile["overlay"]
+        am = self.am
+        if not config["enabled"] or am is None or not am.is_foreground() or am.is_minimized():
+            return None
+        status = status or self.status()
+        hotkeys = self.profile["module_hotkeys"]
+        rows = [(title, hotkeys[name].upper(), status[name][0]) for name, title in MODULES
+                if status[name][0] or hotkeys[name]]
+        if not rows:
+            return None
+        return {"client": am.client_rect_on_screen(), "corner": config["corner"], "rows": rows}
 
     # ---------- status para a UI ----------
 

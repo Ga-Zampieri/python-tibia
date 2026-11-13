@@ -59,7 +59,7 @@ def test_failed_input_block_cancels_rune():
 
     assert macro_runner.execute("f5") is False
     assert am.calls == []
-    assert "administrador" in messages[0]
+    assert "segurar o mouse" in messages[0]
 
 
 def test_cursor_is_restored_after_error(monkeypatch):
@@ -108,3 +108,12 @@ def test_drag_without_end_point_is_refused():
 
     assert macro_runner.execute("f6") is False
     assert am.calls == []
+
+
+def test_drag_with_the_game_in_front_uses_the_real_cursor_even_in_background_mode():
+    am = FakeActionManager(foreground=True)
+    macro_runner, _ = runner(am, {"f6": {"mode": "drag", "pos": [1, 2], "end": [3, 4]}})
+
+    assert macro_runner.execute("f6") is True
+
+    assert am.calls == [("drag_cursor", (1, 2), (3, 4))]

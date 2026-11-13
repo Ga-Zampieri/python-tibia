@@ -3,6 +3,7 @@ import random
 import threading
 import time
 
+from .action_manager import priority
 from .status import Status
 
 logger = logging.getLogger(__name__)
@@ -59,12 +60,13 @@ class Pesca:
 
     def _run(self) -> None:
         try:
-            while not self._stop_event.is_set():
-                for water in self.config["waters"]:
-                    for _ in range(3):
-                        if self._stop_event.is_set():
-                            return
-                        self._cast(water)
+            with priority("fishing"):
+                while not self._stop_event.is_set():
+                    for water in self.config["waters"]:
+                        for _ in range(3):
+                            if self._stop_event.is_set():
+                                return
+                            self._cast(water)
         except Exception:
             logger.exception("Erro fatal na pesca")
         finally:

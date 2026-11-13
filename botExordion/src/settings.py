@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import threading
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,8 @@ LEGACY_MAPPINGS = ROOT / "assets" / "runa_mappings.json"
 DEFAULT_NAME = "Padrão"
 PROFILE_FORMAT = "exordion-profile"
 NAME_LIMIT = 40
+SAVE_ATTEMPTS = 5
+SAVE_RETRY_SECONDS = 0.05
 
 DEFAULT_PROFILE = {
     "window_title": "",
@@ -49,6 +52,13 @@ DEFAULT_PROFILE = {
              "items": [], "bags": []},
     "repeater": {"key": "f5", "interval": 1.0},
     "alarm": {"sound": True, "pause_modules": True},
+    # Painel sobre o jogo com os módulos ligados e os atalhos; corner: "left" ou "right".
+    "overlay": {"enabled": True, "corner": "left"},
+    # Bot grudado no jogo: acompanha a janela e vem para frente com ela; offset em pixels.
+    "follow_game": {"enabled": True, "offset": None},
+    # mode: "auto" (mensagem só com o jogo atrás) ou "message" (sempre, se o teste aprovar).
+    # pause_ms: um quadro do cliente; server_wait: quanto esperar o servidor mover um item.
+    "input": {"mode": "auto", "pause_ms": 30, "server_wait": 2.0, "diagnostic": False},
     "survival": {
         "hp_bar": None,
         "mana_bar": None,
@@ -187,10 +197,20 @@ class ProfileStore:
 
     def save(self, name: str, profile: dict) -> None:
         path = self._path(name)
-        temp = path.with_suffix(".tmp")
+        # Um temporário por processo: duas cópias do bot abertas não disputam o mesmo arquivo.
+        temp = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
         with self._lock:
             temp.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(temp, path)
+            for attempt in range(SAVE_ATTEMPTS):
+                try:
+                    os.replace(temp, path)
+                    return
+                except PermissionError:
+                    # Antivírus, indexador ou outra cópia do bot lendo o arquivo naquele instante.
+                    if attempt == SAVE_ATTEMPTS - 1:
+                        temp.unlink(missing_ok=True)
+                        raise
+                    time.sleep(SAVE_RETRY_SECONDS)
 
     def delete(self, name: str) -> None:
         self._path(name).unlink(missing_ok=True)

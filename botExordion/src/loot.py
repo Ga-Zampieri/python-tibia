@@ -15,6 +15,9 @@ from collections import namedtuple
 
 import numpy as np
 
+import time
+
+from .action_manager import click_item, drag_item, priority
 from .battle_vision import crop
 
 logger = logging.getLogger(__name__)
@@ -26,9 +29,8 @@ EMPTY_RANGE = 60  # o fundo do slot vazio é uma textura escura e quase sem cont
 PIXEL_TOLERANCE = 30
 CHANGED_PIXELS_LIMIT = 0.02
 MAX_STEPS = 40
-CHANGE_CHECKS = 20  # com a espera abaixo e a captura (50 ms), dá uns 2 s para o servidor responder
 CHANGE_CHECK_SECONDS = 0.05
-SCROLL_CHECKS = 6  # a rolagem é local e não espera o servidor
+SCROLL_SECONDS = 0.6  # a rolagem é local e não espera o servidor
 VIEW_ABOVE = 5  # a área rolável começa acima do primeiro slot
 VIEW_BELOW = 1  # e termina na moldura da janela, antes do fim do último vão
 MIN_VISIBLE = 24  # cada clique rola 14 px, então a fileira costuma aparecer cortada
@@ -138,6 +140,15 @@ def read_view(frame, grid) -> list:
             x = left + column * PITCH
             slots.append(Slot(x, first, crop(frame, (x, first, SLOT, last - first)), first - row_top))
     return slots
+
+
+def capture_area(grid):
+    """Retângulo (cliente) com tudo o que o loot olha: slots, rolagem e moldura."""
+    if not grid:
+        return None
+    left, _, columns, _ = grid
+    start, end = view_bounds(grid)
+    return (left - 2, start - 2, columns * PITCH + SCROLL_X + 12, end - start + 4)
 
 
 def scroll_point(grid, down: bool):
@@ -310,9 +321,24 @@ class Looter:
     def _first(self, view, kind):
         return next((slot for slot in view if self.classify(slot.pixels, slot.skip) == kind), None)
 
+    def _server_wait(self) -> float:
+        """Quanto esperar o servidor responder (Ajustes > Input). Por tempo, e não por
+        contagem: com a captura rápida, cada olhada leva bem menos."""
+        try:
+            return max(0.0, float(self.profile["input"]["server_wait"]))
+        except (TypeError, ValueError):
+            return 2.0
+
+    def _checks(self, seconds: float):
+        deadline = time.monotonic() + seconds
+        while True:
+            yield
+            if time.monotonic() >= deadline:
+                return
+
     def _wait_change(self, before):
         """True se mudou, False se não mudou e None se pararam ou a imagem sumiu."""
-        for _ in range(CHANGE_CHECKS):
+        for _ in self._checks(self._server_wait()):
             if self._stop_event.wait(CHANGE_CHECK_SECONDS):
                 return None
             after = self._read()
@@ -331,32 +357,20 @@ class Looter:
         with self.am.guarded() as blocked:
             if not blocked:
                 self._stop_event.set()
-                self.log("Loot: não foi possível bloquear o input (precisa de admin).")
+                self.log("Loot: não foi possível segurar o mouse.")
                 return False
             return bool(action())
 
     def _click(self, pos, button: str) -> bool:
-        def click():
-            if not self.am.is_foreground():
-                return self.am.right_click(pos) if button == "right" else self.am.left_click(pos)
-            original = self.am.get_cursor()
-            try:
-                self.am.press_with_cursor(pos, button)
-                return True
-            finally:
-                self.am.set_cursor(original)
-        return self._act(click)
+        return self._act(lambda: click_item(self.am, pos, button, background=True, interface=True))
 
     def _take(self, slot, view) -> bool:
         start = self._center(slot)
         sprite = match(slot.pixels, self.config["items"], slot.skip)
         end = destinations(self.config)[destination_of(self.config, sprite)]
-        # Com o jogo na frente, o cliente lê o cursor real e ignora o arrasto por mensagem.
-        if self.profile["drag_in_background"] and not self.am.is_foreground():
-            drag = lambda: self.am.drag(start, end)  # noqa: E731
-        else:
-            drag = lambda: self.am.drag_with_cursor(start, end, quick=True)  # noqa: E731
-        changed = self._wait_change(view) if self._act(drag) else None
+        background = self.profile["drag_in_background"]
+        moved = self._act(lambda: drag_item(self.am, start, end, background, quick=True))
+        changed = self._wait_change(view) if moved else None
         if changed is False:
             # Uma tentativa só: o corpo fica para trás, aberto, e o próximo aperto começa do zero.
             return self._give_up("Loot: um item não saiu do lugar e deixei esse corpo. Sem cap ou mochila cheia?")
@@ -391,7 +405,7 @@ class Looter:
         before = self._scroll_area()
         if before is None or not self._click(scroll_point(self.config["grid"], down), "left"):
             return False
-        for _ in range(SCROLL_CHECKS):
+        for _ in self._checks(min(SCROLL_SECONDS, self._server_wait())):
             if self._stop_event.wait(CHANGE_CHECK_SECONDS):
                 return False
             after = self._scroll_area()
@@ -445,18 +459,19 @@ class Looter:
         return frame is not None and window_open(frame, self.config["grid"], self._scrolled > 0)
 
     def _closed(self) -> bool:
-        for _ in range(SCROLL_CHECKS):
+        for _ in self._checks(min(SCROLL_SECONDS, self._server_wait())):
             if self._stop_event.wait(CHANGE_CHECK_SECONDS) or not self._window_open():
                 return True
         return False
 
     def _run(self) -> None:
         try:
-            for _ in range(MAX_STEPS):
-                if self._stop_event.is_set() or not self._step():
-                    break
-            if self._finished and not self._stop_event.is_set():
-                self._close()
+            with priority("loot"):
+                for _ in range(MAX_STEPS):
+                    if self._stop_event.is_set() or not self._step():
+                        break
+                if self._finished and not self._stop_event.is_set():
+                    self._close()
             self.log(f"Loot: {self.taken} item(ns) pego(s).")
         except Exception:
             logger.exception("Erro no loot")

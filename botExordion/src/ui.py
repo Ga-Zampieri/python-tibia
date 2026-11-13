@@ -5,12 +5,15 @@ periodicamente.
 """
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
+import re
 import tkinter as tk
 from tkinter import filedialog
 
 import customtkinter as ctk
+import win32gui
 from PIL import Image, ImageDraw, ImageTk
 
 from .app_log import LOG_DIR
@@ -18,21 +21,12 @@ from .battle_vision import signature_image
 from .bot import MODULE_TITLES, MODULES, BotController
 from .loot import decode_sprite, destination_of, destinations
 from .capture import virtual_screen_bounds
+from .overlay import GameOverlay
+from .theme import ACCENT, ACCENT_DARK, BAG, BG, CARD, CARD_HOVER, DANGER, FONT, LINE, MUTED, TEXT
+from .window_follow import follow_step, move_window, raise_without_focus, window_origin
 
 logger = logging.getLogger(__name__)
 
-BG = "#14161a"
-CARD = "#1d2026"
-CARD_HOVER = "#262a31"
-LINE = "#2c3038"
-TEXT = "#e8eaed"
-MUTED = "#8e94a0"
-ACCENT = "#3ddc97"
-ACCENT_DARK = "#2fae78"
-DANGER = "#e5484d"
-BAG = "#e5b64a"
-
-FONT = "Segoe UI"
 SIZE = (470, 610)
 MINI_SIZE = (340, 48)
 
@@ -45,6 +39,34 @@ def font(size=13, weight="normal"):
 
 
 LOOT_FILES = (("Lista de loot", "*.json"),)
+INPUT_LABELS = {"auto": "Automático", "message": "Só mensagem"}
+
+
+def covering_rects(hwnds):
+    """Onde estão as janelas do bot, para a captura rápida não ler por cima delas.
+    Só win32: roda na thread da visão, e o Tk não pode ser tocado fora da sua."""
+    rects = []
+    for hwnd in hwnds:
+        try:
+            if win32gui.IsWindowVisible(hwnd) and not win32gui.IsIconic(hwnd):
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                rects.append((left, top, right - left, bottom - top))
+        except Exception:
+            continue
+    return rects
+LOOT_COLUMNS = 7  # antes de a largura ser conhecida
+FOLLOW_MS = 200
+
+
+def natural_key(text):
+    """F2 antes de F10."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", text.lower())]
+
+
+def set_text(label, text, color=None):
+    """Só redesenha o que mudou: o status é relido duas vezes por segundo."""
+    if label.cget("text") != text or (color is not None and label.cget("text_color") != color):
+        label.configure(text=text, **({"text_color": color} if color is not None else {}))
 PROFILE_FILES = (("Perfil do Exordion", "*.json"),)
 
 
@@ -77,8 +99,14 @@ class ExordionApp(ctk.CTk):
         self._build_mini()
         self._build_pages()
 
+        self.overlay = GameOverlay(self)
+        own = (int(self.wm_frame(), 16), int(self.overlay.window.wm_frame(), 16))
+        self.bot.covering_windows = lambda: covering_rects(own)
+        self._last_game = None
+        self._game_was_front = False
         self._refresh_status()
         self._poll_events()
+        self._follow_game()
 
     # ---------- estrutura ----------
 
@@ -265,6 +293,7 @@ class ExordionApp(ctk.CTk):
                                         unselected_color=BG, unselected_hover_color=CARD_HOVER)
         widget.set(current)
         self._place(card, widget)
+        return widget
 
     def _page_training(self):
         page = self._detail_page("Treino")
@@ -394,7 +423,7 @@ class ExordionApp(ctk.CTk):
         if not macros:
             self._place(self.macro_list, ctk.CTkLabel(self.macro_list, text="Nenhuma ainda.", font=font(12),
                                                       text_color=MUTED, anchor="w"))
-        for key, macro in sorted(macros.items()):
+        for key, macro in sorted(macros.items(), key=lambda item: natural_key(item[0])):
             row = ctk.CTkFrame(self.macro_list, fg_color="transparent")
             row.columnconfigure(1, weight=1)
             ctk.CTkLabel(row, text=key.upper(), font=font(13, "bold"), text_color=TEXT, width=48,
@@ -485,11 +514,26 @@ class ExordionApp(ctk.CTk):
         if not entries:
             return
         grid = ctk.CTkFrame(self.loot_list, fg_color="transparent")
-        for position, (index, sprite) in enumerate(entries):
+        buttons = []
+        for index, sprite in entries:
             image = ctk.CTkImage(Image.fromarray(decode_sprite(sprite)), size=(32, 32))
-            ctk.CTkButton(grid, text="", image=image, width=40, height=40, fg_color=BG, hover_color=LINE,
-                          command=lambda i=index: on_click(i)).grid(
-                row=position // 8, column=position % 8, padx=2, pady=2)
+            buttons.append(ctk.CTkButton(grid, text="", image=image, width=40, height=40, fg_color=BG,
+                                         hover_color=LINE, command=lambda i=index: on_click(i)))
+        layout = {"columns": None}
+
+        def reflow(_event=None):
+            # Quantos cabem na largura de agora: com número fixo, o último da linha era cortado.
+            width = grid.winfo_width()
+            cell = buttons[0].winfo_reqwidth() + 4
+            columns = max(1, width // cell) if width > cell else LOOT_COLUMNS
+            if columns == layout["columns"]:
+                return
+            layout["columns"] = columns
+            for position, button in enumerate(buttons):
+                button.grid(row=position // columns, column=position % columns, padx=2, pady=2)
+
+        grid.bind("<Configure>", reflow)
+        reflow()
         self._place(self.loot_list, grid)
 
     def _popup(self, entries):
@@ -622,7 +666,9 @@ class ExordionApp(ctk.CTk):
     def _page_settings(self):
         page = self._detail_page("Ajustes")
 
-        card = self._section(page, "Janela do jogo", "O bot acha o Tibia sozinho. Escolha aqui se ele não achar.")
+        card = self._section(page, "Janela do jogo", "O bot acha o Tibia sozinho. Escolha aqui se ele não achar. "
+                                                     "Grudado, ele acompanha o jogo e vem para frente junto dele.")
+        self._check(card, "Grudar o bot no jogo", self.bot.profile["follow_game"], "enabled")
         self.window_menu = ctk.CTkOptionMenu(card, values=["Clique em Atualizar"], height=30, font=font(12),
                                              fg_color=BG, button_color=LINE, button_hover_color=CARD_HOVER,
                                              dynamic_resizing=False)
@@ -645,6 +691,36 @@ class ExordionApp(ctk.CTk):
             "Vale Ctrl, Alt e Shift. ESC sempre para tudo.",
         )
         self._fill_hotkeys()
+
+        card = self._section(page, "Painel sobre o jogo", "Mostra os módulos ligados e os atalhos, só com o jogo "
+                                                          "na frente. O mouse passa através dele.")
+        overlay = self.bot.profile["overlay"]
+        self._check(card, "Mostrar painel", overlay, "enabled")
+        corners = {"Canto esquerdo": "left", "Canto direito": "right"}
+
+        def corner_changed(label):
+            overlay["corner"] = corners[label]
+            self.bot.save()
+
+        self._segmented(card, list(corners), next(k for k, v in corners.items() if v == overlay["corner"]),
+                        corner_changed)
+
+        card = self._section(
+            page, "Input",
+            "Automático: com o jogo atrás, mensagem; na frente, o cursor, que o cliente sempre aceita. "
+            "Só mensagem nunca mexe no seu mouse, mas só vale se o Testar input aprovar.")
+        settings = self.bot.profile["input"]
+        modes = {"Automático": "auto", "Só mensagem": "message"}
+
+        def mode_changed(label):
+            settings["mode"] = modes[label]
+            self.bot.save()
+
+        self.input_mode = self._segmented(card, list(modes), INPUT_LABELS[settings["mode"]], mode_changed)
+        self._field(card, "Pausa entre passos (ms)", settings, "pause_ms", int)
+        self._field(card, "Espera do servidor (s)", settings, "server_wait", float)
+        self._check(card, "Diagnóstico: registrar cada ação no log", settings, "diagnostic")
+        self._buttons(card, ("Testar input", self.bot.test_input))
 
         card = self._section(page, "Diagnóstico")
         self._buttons(card, ("Abrir pasta de logs", lambda: os.startfile(LOG_DIR)))
@@ -828,6 +904,14 @@ class ExordionApp(ctk.CTk):
         self.log_box.configure(state="disabled")
 
     def _poll_events(self):
+        try:
+            self._handle_events()
+        except Exception:
+            logger.exception("Erro ao atualizar a interface")
+        finally:  # um erro aqui não pode parar o log e os avisos para sempre
+            self.after(120, self._poll_events)
+
+    def _handle_events(self):
         while not self.bot.events.empty():
             kind, payload = self.bot.events.get_nowait()
             if kind == "log":
@@ -849,26 +933,66 @@ class ExordionApp(ctk.CTk):
                 self._show_banner(f"ALARME: {payload}", DANGER, "OK", self.banner.grid_forget)
                 self.deiconify()
                 self.lift()
-        self.after(120, self._poll_events)
+            elif kind == "input":
+                self.input_mode.set(INPUT_LABELS[self.bot.profile["input"]["mode"]])
+            elif kind == "warning":
+                self._show_banner(payload, DANGER, "OK", self.banner.grid_forget)
+
+    def _follow_game(self):
+        try:
+            self._follow_step()
+        except Exception:
+            logger.exception("Erro ao acompanhar o jogo")
+        finally:
+            self.after(FOLLOW_MS, self._follow_game)
+
+    def _follow_step(self):
+        config = self.bot.profile["follow_game"]
+        am = self.bot.am
+        if not config["enabled"] or am is None or am.is_minimized() or self.state() != "normal":
+            self._last_game = None  # ao voltar, o bot reaparece no lugar de sempre
+            self._game_was_front = False
+            return
+        hwnd = int(self.wm_frame(), 16)
+        game = am.client_rect_on_screen()[:2]
+        target, offset = follow_step(game, self._last_game, window_origin(hwnd), config["offset"])
+        if target is not None:
+            move_window(hwnd, *target)
+        if offset != config["offset"]:
+            config["offset"] = offset
+            self._save_soon()
+        self._last_game = game
+        front = am.is_foreground()
+        # Só na chegada do jogo à frente: depois disso, quem decide é a pessoa.
+        if front and not self._game_was_front and not self.mini:
+            raise_without_focus(hwnd)
+        self._game_was_front = front
 
     def _refresh_status(self):
-        status = self.bot.status()
+        try:
+            status = self.bot.status()
+            self._show_status(status)
+            self.overlay.show(self.bot.overlay_state(status))
+        except Exception:
+            logger.exception("Erro ao atualizar o status")
+        finally:
+            self.after(500, self._refresh_status)
+
+    def _show_status(self, status):
         if status["connected"]:
-            title = status["title"]
-            self.connection.configure(text=f"● {title[:26]}", text_color=ACCENT)
+            set_text(self.connection, f"● {status['title'][:26]}", ACCENT)
         else:
-            self.connection.configure(text="○ Jogo não encontrado", text_color=MUTED)
+            set_text(self.connection, "○ Jogo não encontrado", MUTED)
 
         active = []
         for name, (switch, detail) in self.rows.items():
             on, text = status[name]
-            detail.configure(text=text)
+            set_text(detail, text)
             if on:
                 active.append(MODULE_TITLES[name])
             if switch is not None and bool(switch.get()) != on:
                 switch.select() if on else switch.deselect()
-        self.mini_label.configure(text=" · ".join(active) or "Nada ligado")
-        self.after(500, self._refresh_status)
+        set_text(self.mini_label, " · ".join(active) or "Nada ligado")
 
     def _close(self):
         self.bot.shutdown()

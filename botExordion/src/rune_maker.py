@@ -5,6 +5,7 @@ import logging
 import threading
 
 from . import battle_vision
+from .action_manager import drag_item, priority
 
 logger = logging.getLogger(__name__)
 
@@ -60,23 +61,28 @@ class RuneMaker:
 
     def _run(self) -> None:
         try:
-            while not self._stop_event.is_set():
-                if not self.has_mana():
-                    self._stop_event.wait(1.0)
-                    continue
-                self.cycle()
-                self._stop_event.wait(max(1.0, float(self.config["interval"])))
+            with priority("rune_maker"):
+                self._loop()
         except Exception:
             logger.exception("Erro no rune maker")
             self._stop_event.set()
 
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            if not self.has_mana():
+                self._stop_event.wait(1.0)
+                continue
+            self.cycle()
+            self._stop_event.wait(max(1.0, float(self.config["interval"])))
+
     def _guarded_drag(self, start, end) -> bool:
         with self.am.guarded() as blocked:
             if not blocked:
-                self.log("Rune maker: não foi possível bloquear o input (precisa de admin).")
+                self.log("Rune maker: não foi possível segurar o mouse.")
                 self._stop_event.set()
                 return False
-            return self.am.drag(start, end)
+            # Sem pressa: é AFK, e o ritmo normal é o mais seguro.
+            return drag_item(self.am, start, end, background=True)
 
     def _read_hand(self):
         frame = self.get_frame()

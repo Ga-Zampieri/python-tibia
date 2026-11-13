@@ -30,10 +30,10 @@ def bot(tmp_path, monkeypatch):
 
 
 def drain(bot):
-    keys = []
+    labels = []
     while not bot._actions.empty():
-        keys.append(bot._actions.get_nowait())
-    return keys
+        labels.append(bot._actions.get_nowait()[3])
+    return labels
 
 
 def battle_frame(rows=2):
@@ -560,5 +560,208 @@ def test_normal_mode_heals_low_target_with_the_rune(bot):
     bot.set_module("training", True)
 
     bot.vision_tick(10.0)
+    assert bot.am.calls == []  # a leitura da tela não espera o mouse
+    assert bot.run_next_action(timeout=0)
 
     assert bot.am.calls == [("right", (7, 8)), ("left", (50, 10))]
+
+
+def test_a_busy_profile_file_does_not_break_the_hotkey(bot, monkeypatch):
+    def busy(name, profile):
+        raise PermissionError(32, "O arquivo já está sendo usado por outro processo")
+
+    monkeypatch.setattr(bot.store, "save", busy)
+    bot.profile["macros"]["f5"] = {"mode": "normal", "pos": [1, 2], "end": None}
+
+    bot._toggle_module("macros")
+
+    assert bot.macros_on
+    assert any("Não consegui salvar" in message for message in drain_logs(bot))
+
+
+def drain_logs(bot):
+    messages = []
+    while not bot.events.empty():
+        kind, payload = bot.events.get_nowait()
+        if kind == "log":
+            messages.append(payload)
+    return messages
+
+
+class FakeCapture:
+    made = []
+
+    def __init__(self, am, count, timeout, on_point, on_done):
+        self.on_done = on_done
+        FakeCapture.made.append(self)
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        pass
+
+
+def test_a_replaced_capture_does_not_clear_the_new_one(bot, monkeypatch):
+    FakeCapture.made = []
+    monkeypatch.setattr("src.bot.ClickCapture", FakeCapture)
+    bot.capture_rod()
+    bot.capture_food()
+    old, new = FakeCapture.made
+    drain_logs(bot)
+
+    old.on_done([[1, 1]])
+
+    assert bot._click_capture is new
+    assert bot.profile["fishing"]["rod"] is None
+    new.on_done([[5, 5]])
+    assert bot.profile["survival"]["eat"]["pos"] == [5, 5]
+    assert bot._click_capture is None
+
+
+def test_overlay_shows_what_is_on_and_what_has_a_hotkey(bot):
+    bot.profile["module_hotkeys"].update(loot="f5", macros="shift+f1")
+    bot.set_module("macros", True)
+
+    state = bot.overlay_state()
+
+    assert state["client"] == (100, 50, 800, 600)
+    assert state["corner"] == "left"
+    assert state["rows"] == [("Macros", "SHIFT+F1", True), ("Loot", "F5", False)]
+
+
+def test_overlay_hides_when_the_game_is_behind_or_it_is_turned_off(bot):
+    bot.profile["module_hotkeys"]["loot"] = "f5"
+    bot.am.foreground = False
+    assert bot.overlay_state() is None
+
+    bot.am.foreground = True
+    bot.profile["overlay"]["enabled"] = False
+    assert bot.overlay_state() is None
+
+
+def test_overlay_hides_when_there_is_nothing_to_show(bot):
+    bot.profile["module_hotkeys"] = {name: "" for name in bot.profile["module_hotkeys"]}
+    assert bot.overlay_state() is None
+
+
+# ---------- fila com prioridade ----------
+
+def test_heal_jumps_ahead_of_queued_macros(bot):
+    done = []
+    bot.queue_action("loot", "loot", lambda: done.append("loot"))
+    bot.queue_action("macro", "f5", lambda: done.append("f5"))
+    bot.queue_action("heal", "exura", lambda: done.append("exura"))
+
+    while bot.run_next_action(timeout=0):
+        pass
+
+    assert done == ["exura", "f5", "loot"]
+
+
+def test_survival_rule_goes_through_the_queue_as_heal(bot):
+    rule = bot.profile["survival"]["rules"][0]
+    rule.update(enabled=True, action="f5", percent=50)
+    bot.survival_on = True
+    bot.hp = 20.0
+
+    bot.vision_tick(1.0)
+
+    assert bot.am.calls == []
+    level = bot._actions.queue[0][2]
+    assert level == "heal"
+    bot.run_next_action(timeout=0)
+    assert bot.am.calls  # a macro f5 rodou
+
+
+# ---------- captura rápida ----------
+
+def fast_bot(bot, fast_frame):
+    calls = {"grab": 0, "full": 0}
+    full = np.full((100, 100, 3), 50, dtype=np.uint8)
+
+    def grab(hwnd, areas, covering):
+        calls["grab"] += 1
+        return fast_frame
+
+    def capture(hwnd):
+        calls["full"] += 1
+        return full
+
+    bot._grab = grab
+    bot._capture_frame = capture
+    return calls, full
+
+
+def test_fast_capture_is_checked_once_against_the_full_one(bot):
+    fast = np.zeros((100, 100, 3), dtype=np.uint8)
+    fast[10:20, 10:30] = 50
+    calls, full = fast_bot(bot, fast)
+
+    assert bot._game_frame([(10, 10, 20, 10)]) is full  # primeira vez: confere
+    assert bot._game_frame([(10, 10, 20, 10)]) is fast
+    assert calls == {"grab": 2, "full": 1}
+
+
+def test_fast_capture_that_differs_from_the_game_is_turned_off(bot):
+    calls, full = fast_bot(bot, np.zeros((100, 100, 3), dtype=np.uint8))  # escala de tela, por exemplo
+
+    bot._game_frame([(10, 10, 20, 10)])
+    assert bot._game_frame([(10, 10, 20, 10)]) is full
+
+    assert calls == {"grab": 1, "full": 2}
+
+
+def test_without_areas_the_full_capture_is_used(bot):
+    calls, full = fast_bot(bot, np.zeros((100, 100, 3), dtype=np.uint8))
+    assert bot._game_frame() is full
+    assert calls["grab"] == 0
+
+
+# ---------- Testar input ----------
+
+def input_test_bot(bot, monkeypatch, moves_by):
+    from PIL import Image
+    from pathlib import Path
+    from src import loot
+    sample = np.asarray(Image.open(Path(__file__).parent / "assets" / "loot_backpack.png").convert("RGB"))
+    moved = sample.copy()
+    moved[25:57, 14:46] = sample[25:57, 88:120]  # o item saiu do primeiro slot
+    bot.profile["loot"]["grid"] = [14, 25, 4, 1]
+    bot.profile["input"]["server_wait"] = 0.05
+    bot.frames["frame"] = sample
+    monkeypatch.setattr("src.bot.time.sleep", lambda _s: None)
+    am = bot.am
+
+    def drag(start, end, quick=False):
+        am.calls.append(("drag", start, end))
+        if "message" in moves_by:
+            bot.frames["frame"] = moved
+
+    def drag_with_cursor(start, end, quick=False):
+        am.calls.append(("drag_cursor", start, end))
+        if "cursor" in moves_by:
+            bot.frames["frame"] = moved
+
+    am.drag, am.drag_with_cursor = drag, drag_with_cursor
+    bot._run_input_test()
+    return [call[0] for call in am.calls]
+
+
+def test_input_test_switches_to_messages_when_they_work(bot, monkeypatch):
+    calls = input_test_bot(bot, monkeypatch, moves_by={"message", "cursor"})
+    assert calls == ["drag"]
+    assert bot.profile["input"]["mode"] == "message"
+    assert bot.store.load(bot.profile_name)["input"]["mode"] == "message"
+
+
+def test_input_test_keeps_auto_when_only_the_cursor_works(bot, monkeypatch):
+    bot.profile["input"]["mode"] = "message"
+    calls = input_test_bot(bot, monkeypatch, moves_by={"cursor"})
+    assert calls == ["drag", "drag_cursor"]
+    assert bot.profile["input"]["mode"] == "auto"
+
+
+def test_input_test_says_so_when_nothing_moves(bot, monkeypatch):
+    input_test_bot(bot, monkeypatch, moves_by=set())
+    assert any("não se mexeu de nenhum jeito" in message for message in drain_logs(bot))

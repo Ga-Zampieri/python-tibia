@@ -14,6 +14,18 @@ class FakeActionManager:
         self.calls = []
         self.lock = threading.RLock()
         self.block_calls = 0
+        self.settings = {"mode": "auto", "pause_ms": 30, "server_wait": 2.0, "diagnostic": False}
+
+    def configure(self, settings):
+        self.settings = settings
+
+    @property
+    def input_mode(self):
+        return self.settings.get("mode", "auto")
+
+    @property
+    def diagnostic(self):
+        return bool(self.settings.get("diagnostic"))
 
     def is_valid(self):
         return True
@@ -31,6 +43,9 @@ class FakeActionManager:
     def guarded(self):
         self.block_calls += 1
         yield self.block_ok
+
+    def client_rect_on_screen(self):
+        return (100, 50, 800, 600)
 
     def screen_to_client(self, pos):
         return (pos[0] - 100, pos[1] - 50)
@@ -58,7 +73,7 @@ class FakeActionManager:
         self.calls.append(("right", tuple(pos)))
         return True
 
-    def drag(self, start, end):
+    def drag(self, start, end, quick=False):
         self.calls.append(("drag", tuple(start), tuple(end)))
         return True
 

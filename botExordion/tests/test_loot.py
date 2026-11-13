@@ -54,7 +54,7 @@ class Client(FakeActionManager):
     def _index(self, pos):
         return (pos[0] - GRID[0]) // loot.PITCH
 
-    def drag(self, start, end):
+    def drag(self, start, end, quick=False):
         super().drag(start, end)
         if self.can_move:
             self.received.append(self.items.pop(self._index(start)))
@@ -83,7 +83,7 @@ CLOSE = [168, 12]
 
 
 def looter(client, items=(GOLD, ITEM), bags=(BAG,), close=None):
-    profile = merge_defaults(DEFAULT_PROFILE, {"loot": {
+    profile = merge_defaults(DEFAULT_PROFILE, {"input": {"server_wait": 0.02}, "loot": {
         "grid": GRID, "destination": [500, 500], "close": close,
         "items": [loot.encode_sprite(pixels) for pixels in items],
         "bags": [loot.encode_sprite(pixels) for pixels in bags],
@@ -215,7 +215,7 @@ def test_without_image_it_does_nothing():
 
 def test_step_limit_ends_a_container_that_never_empties():
     class Endless(Client):
-        def drag(self, start, end):
+        def drag(self, start, end, quick=False):
             self.calls.append(("drag",))
             self.items = [ITEM if self.items[0] is GOLD else GOLD]
             return True
@@ -308,7 +308,7 @@ def test_cancelled_loot_keeps_the_window_open():
 
 def test_step_limit_does_not_close():
     class Endless(Client):
-        def drag(self, start, end):
+        def drag(self, start, end, quick=False):
             self.calls.append(("drag",))
             self.items = [ITEM if self.items[0] is GOLD else GOLD]
             return True

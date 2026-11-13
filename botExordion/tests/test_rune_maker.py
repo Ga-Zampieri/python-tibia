@@ -11,7 +11,7 @@ def make(mana=None, am=None):
     config = copy.deepcopy(DEFAULT_PROFILE["rune_maker"])
     config.update(blank=[1, 1], hand=[2, 2], output=[3, 3], spell="adura vita", cast_wait=0.2)
     maker = RuneMaker(config, lambda: mana)
-    maker.am = am or FakeActionManager()
+    maker.am = am or FakeActionManager(foreground=False)
     maker._stop_event.wait = lambda _seconds: False
     return maker
 
@@ -138,3 +138,11 @@ def test_stopping_while_waiting_for_the_blank_does_not_alert():
 
     assert maker.cycle() is False
     assert maker.alerts == []
+
+
+def test_game_in_front_moves_runes_with_the_real_cursor():
+    maker = make(am=FakeActionManager(foreground=True))
+
+    assert maker.cycle() is True
+
+    assert [call[0] for call in maker.am.calls] == ["drag_cursor", "text", "drag_cursor"]

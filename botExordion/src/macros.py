@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from time import sleep
 
+from .action_manager import drag_item, use_messages
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,13 +38,12 @@ class MacroRunner:
             return False
         with self.am.guarded() as blocked:
             if not blocked:
-                self.log("Não foi possível bloquear o input. Abra o bot como administrador.")
+                self.log("Não foi possível segurar o mouse para a macro.")
                 return False
             try:
-                # Com o jogo atrás, o cursor real clicaria na janela que está na frente.
-                if self.am.is_foreground():
-                    return self._rune_with_cursor(pos, target)
-                return self._rune_with_messages(pos, target)
+                if use_messages(self.am, background=True):
+                    return self._rune_with_messages(pos, target)
+                return self._rune_with_cursor(pos, target)
             except Exception as exc:
                 self.log(f"Erro ao usar a runa de {label}: {exc}")
                 return False
@@ -70,8 +71,6 @@ class MacroRunner:
             return False
         with self.am.guarded() as blocked:
             if not blocked:
-                self.log("Não foi possível bloquear o input. Abra o bot como administrador.")
+                self.log("Não foi possível segurar o mouse para a macro.")
                 return False
-            if self.profile["drag_in_background"]:
-                return self.am.drag(macro["pos"], macro["end"])
-            return self.am.drag_with_cursor(macro["pos"], macro["end"])
+            return drag_item(self.am, macro["pos"], macro["end"], self.profile["drag_in_background"], quick=True)

@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -134,3 +135,37 @@ def test_rename_does_not_overwrite_another_profile(tmp_path):
     with pytest.raises(FileExistsError):
         store.rename("A", "B")
     assert store.load("B")["b"] == 1
+
+
+def test_save_retries_while_the_file_is_busy(tmp_path, monkeypatch):
+    store = ProfileStore(tmp_path, tmp_path / "missing.json")
+    real_replace = os.replace
+    failures = iter([PermissionError(32, "em uso"), PermissionError(32, "em uso")])
+
+    def busy(source, target):
+        error = next(failures, None)
+        if error:
+            raise error
+        real_replace(source, target)
+
+    monkeypatch.setattr("src.settings.os.replace", busy)
+    monkeypatch.setattr("src.settings.time.sleep", lambda _s: None)
+
+    store.save("Knight", {"a": 1})
+
+    assert store.load("Knight")["a"] == 1
+    assert not list((tmp_path / "profiles").glob("*.tmp"))
+
+
+def test_save_gives_up_cleanly_when_the_file_stays_busy(tmp_path, monkeypatch):
+    store = ProfileStore(tmp_path, tmp_path / "missing.json")
+
+    def busy(source, target):
+        raise PermissionError(32, "em uso")
+
+    monkeypatch.setattr("src.settings.os.replace", busy)
+    monkeypatch.setattr("src.settings.time.sleep", lambda _s: None)
+
+    with pytest.raises(PermissionError):
+        store.save("Knight", {"a": 1})
+    assert not list((tmp_path / "profiles").glob("*.tmp"))
