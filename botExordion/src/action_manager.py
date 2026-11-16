@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 SEND_TIMEOUT_MS = 1000
 GUARD_TIMEOUT = 1.5
 # Quem passa na frente quando dois módulos querem o mouse ao mesmo tempo.
-PRIORITIES = {"heal": 0, "macro": 1, "loot": 2, "repeater": 3, "normal": 4, "rune_maker": 5, "fishing": 6}
+PRIORITIES = {"heal": 0, "macro": 1, "loot": 2, "repeater": 3, "normal": 4, "rune_maker": 5, "fishing": 6,
+              "stacker": 7}
 LLMHF_ANY_INJECTED = 0x1 | 0x2
 MOUSE_UP_FLAGS = {0x0202: 0x0004, 0x0205: 0x0010, 0x0208: 0x0040}  # mensagem do soltar -> mouse_event
 DEFAULT_INPUT = {"pause_ms": 30, "server_wait": 2.0, "diagnostic": False}
@@ -405,22 +406,15 @@ class ActionManager:
         return self._click(pos, win32con.WM_RBUTTONDOWN, win32con.WM_RBUTTONUP, win32con.MK_RBUTTON)
 
     def drag(self, start, end, steps: int = 12, duration: float = 0.2, quick: bool = False) -> bool:
-        """Arrasta por mensagens, sem foco.
-
-        O cliente solta o item onde está o cursor de verdade, e não onde a
-        mensagem diz. Por isso o cursor fica parado em cima do destino durante o
-        arrasto e só volta depois que o cliente viu o soltar."""
+        """Arrasta por mensagens, sem foco e sem mexer no cursor real."""
         sx, sy = int(start[0]), int(start[1])
         ex, ey = int(end[0]), int(end[1])
         settle, hold = (self.pause, self.pause) if quick else (0.05, 0.08)
         if quick:
             steps, duration = QUICK_STEPS, QUICK_DURATION
         pressed = False
-        original = None
         try:
             with self.lock:
-                original = self.get_cursor()
-                self.set_cursor(self.client_to_screen((ex, ey)))
                 self._send(win32con.WM_MOUSEMOVE, 0, make_lparam(sx, sy))
                 time.sleep(settle)
                 self._send(win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, make_lparam(sx, sy))
@@ -434,8 +428,6 @@ class ActionManager:
                 time.sleep(settle)
                 self._send(win32con.WM_LBUTTONUP, 0, make_lparam(ex, ey))
                 pressed = False
-                self._send(win32con.WM_MOUSEMOVE, 0, make_lparam(ex, ey))
-                time.sleep(DROP_GRACE)
             return True
         except Exception as exc:
             logger.error("Erro durante o arrasto: %s", exc)
@@ -444,9 +436,6 @@ class ActionManager:
             if pressed:  # nunca deixa o botão "preso" no cliente
                 with contextlib.suppress(Exception):
                     self._send(win32con.WM_LBUTTONUP, 0, make_lparam(ex, ey))
-            if original is not None:
-                with contextlib.suppress(Exception):
-                    self.set_cursor(original)
 
     # ---------- mouse pelo cursor real (exige o jogo na frente) ----------
 

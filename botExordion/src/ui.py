@@ -69,6 +69,9 @@ def set_text(label, text, color=None):
 PROFILE_FILES = (("Perfil do Exordion", "*.json"),)
 
 
+ONE_SHOT = {"loot": "Pegar", "stacker": "Juntar"}
+
+
 class ExordionApp(ctk.CTk):
     def __init__(self, bot: BotController):
         ctk.set_appearance_mode("dark")
@@ -163,6 +166,7 @@ class ExordionApp(ctk.CTk):
             "alarm": self._page_alarm,
             "survival": self._page_survival,
             "rune_maker": self._page_rune_maker,
+            "stacker": self._page_stacker,
             "settings": self._page_settings,
         }
         for name, builder in builders.items():
@@ -270,11 +274,11 @@ class ExordionApp(ctk.CTk):
                          height=20).pack(anchor="w")
             detail = ctk.CTkLabel(text, text="", font=font(12), text_color=MUTED, anchor="w", height=18)
             detail.pack(anchor="w")
-            if name == "loot":  # age uma vez e termina: não tem estado para ligar
+            if name in ONE_SHOT:  # age uma vez e termina: não tem estado para ligar
                 switch = None
-                ctk.CTkButton(row, text="Pegar", width=54, height=28, font=font(12), fg_color=CARD_HOVER,
+                ctk.CTkButton(row, text=ONE_SHOT[name], width=54, height=28, font=font(12), fg_color=CARD_HOVER,
                               hover_color=LINE, text_color=TEXT,
-                              command=lambda: self.bot.set_module("loot", True)).grid(row=0, column=1, padx=(0, 2))
+                              command=lambda n=name: self.bot.set_module(n, True)).grid(row=0, column=1, padx=(0, 2))
             else:
                 switch = ctk.CTkSwitch(row, text="", width=44, progress_color=ACCENT, fg_color=LINE,
                                        button_color=TEXT, button_hover_color="#ffffff")
@@ -554,17 +558,130 @@ class ExordionApp(ctk.CTk):
     def _bag_menu(self, bag):
         self._popup([("Remover", lambda: self.bot.remove_loot("bags", bag))])
 
+    def _page_stacker(self):
+        page = self._detail_page("Pilhas")
+        self._section(page, "Como usar", "Aperte o atalho de Pilhas, em Ajustes. A cada aperto ele junta as "
+                                         "pilhas incompletas dos itens escolhidos e termina. Só arrasta com o seu "
+                                         "mouse parado, e macros, cura e loot passam na frente.")
+        card = self._section(page, "Slots da BP", "Selecione só a área dos itens da mochila que vai organizar. "
+                                                  "Ela precisa ficar sempre nesse mesmo lugar.")
+        self._buttons(card, ("Selecionar slots", lambda: self._select_region("stacker")),
+                      ("Testar leitura", self._preview_stacker))
+        card = self._section(page, "Itens", "Clique em Capturar item e depois no item, dentro da BP. Se a pilha "
+                                            "muda de desenho com a quantidade (flechas, bolts, ouro), capture "
+                                            "cada tamanho com + tamanho, no mesmo item.")
+        self._buttons(card, ("Capturar item", self.bot.capture_stack_item))
+        self.stack_list = self._section(page, "Escolhidos", "Clique em um desenho para juntar a outro "
+                                                            "item ou remover.")
+        self._fill_stacker()
+        return page
+
+    def _fill_stacker(self):
+        for child in self.stack_list.winfo_children()[2:]:  # mantém título e dica
+            child.destroy()
+        items = self.bot.profile["stacker"]["items"]
+        if not items:
+            self._place(self.stack_list, ctk.CTkLabel(self.stack_list, text="Nenhum item ainda.", font=font(12),
+                                                      text_color=MUTED, anchor="w"))
+        for group, sprites in enumerate(items):
+            row = ctk.CTkFrame(self.stack_list, fg_color="transparent")
+            ctk.CTkLabel(row, text=f"Item {group + 1}", font=font(13), text_color=TEXT, anchor="w",
+                         width=60).grid(row=0, column=0, sticky="w")
+            sprites_frame = ctk.CTkFrame(row, fg_color="transparent")
+            sprites_frame.grid(row=0, column=1, sticky="w")
+            for column, sprite in enumerate(sprites):
+                image = ctk.CTkImage(Image.fromarray(decode_sprite(sprite)), size=(32, 32))
+                ctk.CTkButton(sprites_frame, text="", image=image, width=40, height=40, fg_color=BG,
+                              hover_color=LINE, command=lambda g=group: self._stack_menu(g)).grid(
+                    row=column // 5, column=column % 5, padx=2, pady=2)
+            row.columnconfigure(1, weight=1)
+            add = self._button(row, "+ tamanho", lambda g=group: self.bot.capture_stack_item(g))
+            add.configure(width=86)
+            add.grid(row=0, column=2, padx=(4, 0), sticky="n")
+            self._place(self.stack_list, row)
+
+    def _stack_menu(self, group):
+        items = self.bot.profile["stacker"]["items"]
+        merges = [(f"Juntar ao item {other + 1}", lambda o=other: self.bot.merge_stack_items(group, o))
+                  for other in range(len(items)) if other != group]
+        self._popup(merges + [("Remover item", lambda: self.bot.remove_stack_item(group))])
+
+    def _preview_stacker(self):
+        pixels, slots = self.bot.test_stacker()
+        if pixels is None:
+            return
+        image = Image.fromarray(pixels).resize((pixels.shape[1] * 2, pixels.shape[0] * 2), Image.NEAREST)
+        draw = ImageDraw.Draw(image)
+        for x, y, group, full in slots:
+            box = (x * 2, y * 2, x * 2 + 63, y * 2 + 63)
+            if group is None:
+                draw.rectangle(box, outline=DANGER, width=2)
+                continue
+            draw.rectangle(box, outline=MUTED if full else ACCENT, width=2)
+            label = f"{group + 1}" + (" cheia" if full else "")
+            draw.rectangle((box[0] + 2, box[1] + 2, box[0] + 6 + 6 * len(label), box[1] + 14), fill=BG)
+            draw.text((box[0] + 4, box[1] + 2), label, fill=TEXT)
+        self._show_preview(image, "Prévia das pilhas")
+
     def _page_repeater(self):
         page = self._detail_page("Repetidor")
-        card = self._section(
-            page, "Repetir",
-            "Se a tecla for uma macro salva, ela roda direto, mesmo com o jogo atrás. "
-            "Senão, a tecla é enviada só para a janela do jogo.",
+        self._section(
+            page, "Como funciona",
+            "Cada tecla dispara no seu intervalo, uma de cada vez. Macro salva roda direto, mesmo com o jogo "
+            "atrás; o atalho do Loot ou de Pilhas chama o módulo; outra tecla vai só para a janela do jogo. "
+            "Mudanças valem na hora, sem desligar.",
         )
-        config = self.bot.profile["repeater"]
-        self._field(card, "Tecla", config, "key", lambda v: v.strip().lower())
-        self._field(card, "Intervalo (s)", config, "interval", float)
+        self.repeater_list = self._section(page, "Teclas", "Tecla, intervalo em segundos e se está ligada.")
+        self._fill_repeater()
         return page
+
+    def _fill_repeater(self):
+        for child in self.repeater_list.winfo_children()[2:]:  # mantém título e dica
+            child.destroy()
+        entries = self.bot.profile["repeater"]["entries"]
+        for index, entry in enumerate(entries):
+            self._repeater_row(index, entry)
+        if not entries:
+            self._place(self.repeater_list, ctk.CTkLabel(self.repeater_list, text="Nenhuma tecla ainda.",
+                                                         font=font(12), text_color=MUTED, anchor="w"))
+        self._buttons(self.repeater_list, ("Adicionar tecla", self.bot.add_repeater_entry))
+
+    def _repeater_row(self, index, entry):
+        row = ctk.CTkFrame(self.repeater_list, fg_color="transparent")
+        row.columnconfigure(3, weight=1)
+        key = tk.StringVar(value=str(entry.get("key", "")))
+        interval = tk.StringVar(value=str(entry.get("interval", 1.0)))
+        enabled = tk.BooleanVar(value=bool(entry.get("enabled", True)))
+
+        def key_changed(*_):
+            entry["key"] = key.get().strip().lower()
+            self._save_soon()
+
+        def interval_changed(*_):
+            try:
+                entry["interval"] = float(interval.get().replace(",", "."))
+            except ValueError:
+                return
+            self._save_soon()
+
+        def enabled_changed():
+            entry["enabled"] = bool(enabled.get())
+            self.bot.save()
+
+        key.trace_add("write", key_changed)
+        interval.trace_add("write", interval_changed)
+        ctk.CTkCheckBox(row, text="", variable=enabled, command=enabled_changed, width=24, fg_color=ACCENT,
+                        hover_color=ACCENT_DARK, checkmark_color=BG, border_color=MUTED).grid(row=0, column=0)
+        ctk.CTkEntry(row, textvariable=key, width=90, height=30, font=font(13), fg_color=BG, border_color=LINE,
+                     text_color=TEXT, placeholder_text="tecla").grid(row=0, column=1, padx=(0, 4))
+        ctk.CTkEntry(row, textvariable=interval, width=60, height=30, font=font(13), fg_color=BG,
+                     border_color=LINE, text_color=TEXT).grid(row=0, column=2)
+        ctk.CTkLabel(row, text="s", font=font(13), text_color=MUTED, anchor="w").grid(row=0, column=3, sticky="w",
+                                                                                     padx=4)
+        remove = self._button(row, "Remover", lambda: self.bot.remove_repeater_entry(index))
+        remove.configure(width=76)
+        remove.grid(row=0, column=4)
+        self._place(self.repeater_list, row)
 
     def _page_alarm(self):
         page = self._detail_page("Alarme")
@@ -917,6 +1034,10 @@ class ExordionApp(ctk.CTk):
                 self._fill_hotkeys()
             elif kind == "loot":
                 self._fill_loot()
+            elif kind == "stacker":
+                self._fill_stacker()
+            elif kind == "repeater":
+                self._fill_repeater()
             elif kind == "names":
                 self._fill_names()
             elif kind == "alarm":

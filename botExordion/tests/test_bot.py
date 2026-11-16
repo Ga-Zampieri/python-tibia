@@ -1,3 +1,4 @@
+import threading
 import json
 
 import numpy as np
@@ -716,3 +717,150 @@ def test_without_areas_the_full_capture_is_used(bot):
     calls, full = fast_bot(bot, np.zeros((100, 100, 3), dtype=np.uint8))
     assert bot._game_frame() is full
     assert calls["grab"] == 0
+
+
+# ---------- Pilhas ----------
+
+def capture_stack(bot, point, group=None):
+    captured = {}
+    bot._begin_capture = lambda prompt, count, done: captured.update(done=done) or True
+    assert bot.capture_stack_item(group)
+    captured["done"]([point])
+
+
+def test_stack_items_are_captured_by_clicking_in_the_backpack(bot):
+    from pathlib import Path
+
+    from PIL import Image
+
+    from src import loot
+    assets = Path(__file__).parent / "assets"
+    frame = np.asarray(Image.open(assets / "stack_backpack.png").convert("RGB"))
+    bot.frames["frame"] = frame
+    bot.profile["stacker"]["grid"] = [56, 40, 4, 1]
+
+    capture_stack(bot, (70, 55))  # pedra com 25
+    assert len(bot.profile["stacker"]["items"]) == 1
+
+    capture_stack(bot, (107, 55))  # pedra com 100: mesmo desenho, não repete
+    assert len(bot.profile["stacker"]["items"]) == 1
+    assert any("já é do item 1" in message for message in drain_logs(bot))
+
+    sample = loot.read_slots(np.asarray(Image.open(assets / "loot_backpack.png").convert("RGB")), [14, 25, 4, 1])
+    gold, empty = sample[1], sample[2]
+    bot.frames["frame"] = frame.copy()
+    bot.frames["frame"][40:72, 167:199] = empty.pixels
+    capture_stack(bot, (181, 55))  # slot vazio
+    assert len(bot.profile["stacker"]["items"]) == 1
+    assert any("clique em cima de um item" in message for message in drain_logs(bot))
+
+    bot.frames["frame"][40:72, 167:199] = gold.pixels
+    capture_stack(bot, (181, 55), group=0)
+    assert len(bot.profile["stacker"]["items"][0]) == 2
+
+    bot.remove_stack_item(0)
+    assert bot.profile["stacker"]["items"] == []
+
+
+# ---------- Repetidor ----------
+
+def test_old_single_key_repeater_becomes_the_first_entry():
+    from src.bot import migrate_repeater
+    config = {"key": "F6", "interval": 2.5}
+    migrate_repeater(config)
+    assert config["entries"] == [{"key": "f6", "interval": 2.5, "enabled": True}]
+    assert config["key"] == ""
+    migrate_repeater(config)  # abrir de novo não duplica
+    assert len(config["entries"]) == 1
+
+
+def test_repeater_uses_only_valid_and_enabled_entries(bot):
+    bot.profile["module_hotkeys"]["stacker"] = "f9"
+    bot.profile["module_hotkeys"]["training"] = "f10"
+    bot.profile["repeater"]["entries"] = [
+        {"key": "f5", "interval": 1.0, "enabled": True},     # macro
+        {"key": "F12", "interval": "0,5", "enabled": True},  # tecla do jogo
+        {"key": "f9", "interval": 3, "enabled": True},       # Pilhas
+        {"key": "f10", "interval": 3, "enabled": True},      # Treino liga e desliga: fora
+        {"key": "f11", "interval": 3, "enabled": False},     # desligada
+        {"key": "f7", "interval": 0, "enabled": True},       # intervalo inválido
+        {"key": "", "interval": 1, "enabled": True},         # vazia
+    ]
+    assert bot.repeater_entries() == [("f5", 1.0), ("f12", 0.5), ("f9", 3.0)]
+
+
+def test_repeater_refuses_to_start_with_nothing_valid(bot):
+    bot.profile["repeater"]["entries"] = [{"key": "", "interval": 1, "enabled": True}]
+    assert not bot.set_module("repeater", True)
+    assert any("nenhuma tecla válida" in message for message in drain_logs(bot))
+
+
+def test_repeater_says_why_a_toggle_module_was_left_out(bot):
+    bot.profile["module_hotkeys"]["training"] = "f10"
+    bot.profile["repeater"]["entries"] = [{"key": "f10", "interval": 1, "enabled": True},
+                                          {"key": "f5", "interval": 60, "enabled": True}]
+    assert bot.set_module("repeater", True)
+    bot.repeater.stop()
+    assert any("liga e desliga Treino" in message for message in drain_logs(bot))
+
+
+def test_repeater_starts_the_stacker_by_its_hotkey(bot):
+    bot.profile["module_hotkeys"]["stacker"] = "f9"
+    started = []
+    bot._set_stacker = lambda on: started.append(on) or True
+    assert bot._repeat("f9")
+    assert started == [True]
+    assert bot.am.calls == []  # não aperta F9 no jogo
+
+
+def test_repeater_skips_the_stacker_while_it_is_running(bot):
+    bot.profile["module_hotkeys"]["stacker"] = "f9"
+    bot.stacker._stop_event.clear()
+    bot.stacker._thread = threading.Thread(target=threading.Event().wait, args=(1,), daemon=True)
+    bot.stacker._thread.start()
+    started = []
+    bot._set_stacker = lambda on: started.append(on) or True
+    assert not bot._repeat("f9")
+    assert started == []
+    bot.stacker._stop_event.set()
+
+
+def test_repeater_triggers_loot_only_with_the_game_in_front(bot):
+    bot.profile["module_hotkeys"]["loot"] = "f8"
+    started = []
+    bot._set_loot = lambda on: started.append(on) or True
+    bot.am.foreground = False
+    assert not bot._repeat("f8")
+    bot.am.foreground = True
+    assert bot._repeat("f8")
+    assert started == [True]
+
+
+def test_separate_stack_items_can_be_merged_into_one(bot):
+    bot.profile["stacker"]["items"] = [["a"], ["b"], ["c"]]
+    bot.merge_stack_items(2, 0)
+    assert bot.profile["stacker"]["items"] == [["a", "c"], ["b"]]
+    bot.merge_stack_items(0, 1)
+    assert bot.profile["stacker"]["items"] == [["b", "a", "c"]]
+    bot.merge_stack_items(0, 0)
+    assert bot.profile["stacker"]["items"] == [["b", "a", "c"]]
+
+
+def test_stacker_preview_marks_each_slot(bot):
+    from pathlib import Path
+
+    from PIL import Image
+
+    from src import loot
+    frame = np.asarray(Image.open(Path(__file__).parent / "assets" / "stack_bolts.png").convert("RGB"))
+    bot.frames["frame"] = frame
+    grid = [26, 37, 4, 5]
+    bot.profile["stacker"]["grid"] = grid
+    view = loot.read_slots(frame, grid)
+    bot.profile["stacker"]["items"] = [[loot.encode_sprite(slot.pixels) for slot in view[:7]]]
+
+    pixels, slots = bot.test_stacker()
+
+    assert pixels.shape[:2] == (loot.PITCH * 4 + loot.SLOT, loot.PITCH * 3 + loot.SLOT)
+    assert [(group, full) for _, _, group, full in slots] == [(0, False)] * 6 + [(0, True), (None, False)]
+    assert any("6 aberta(s), 1 cheia(s)" in message for message in drain_logs(bot))

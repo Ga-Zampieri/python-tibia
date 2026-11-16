@@ -72,20 +72,20 @@ def test_quick_drag_waits_far_less_and_still_ends_on_the_destination(monkeypatch
     assert events[-1] == (7, 8)
 
 
-def test_message_drag_keeps_the_real_cursor_on_the_destination(monkeypatch):
-    """O cliente solta onde está o cursor de verdade, então ele espera no destino."""
+def test_message_drag_never_touches_the_real_cursor(monkeypatch):
+    """Por mensagem é só mensagem: pressiona na origem e solta no destino, sem mexer no cursor."""
     events = []
     fake_user32(monkeypatch, events)
     am = manager(foreground=False)
-    am._send = lambda message, wparam, lparam: events.append(("msg", message))
+    am.set_cursor = lambda pos: events.append(("cursor", tuple(pos)))
+    sent = []
+    am._send = lambda message, wparam, lparam: sent.append((message, lparam))
 
     assert am.drag((10, 10), (90, 50), quick=True)
 
-    up = events.index(("msg", action_manager.win32con.WM_LBUTTONUP))
-    assert events[0] == (90, 50)
-    assert action_manager.DROP_GRACE in events[up:]
-    assert events[-1] == (7, 8)
-
+    assert not [e for e in events if isinstance(e, tuple)]
+    assert sent[1] == (action_manager.win32con.WM_LBUTTONDOWN, action_manager.make_lparam(10, 10))
+    assert sent[-1] == (action_manager.win32con.WM_LBUTTONUP, action_manager.make_lparam(90, 50))
 
 def test_normal_drag_keeps_its_rhythm(monkeypatch):
     events = []

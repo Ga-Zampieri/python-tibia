@@ -16,13 +16,15 @@ from pathlib import Path
 from . import battle_vision, loot
 from .action_manager import PRIORITIES, ActionManager, key_to_vk, priority
 from .alarm import AlarmMonitor
-from .auto_hotkey import AutoHotkey
+from .auto_hotkey import AutoHotkey, parse_interval
 from .capture import capture_client, grab_visible_areas
 from .click_capture import ClickCapture
 from .fishing import Pesca
 from .hotkey_service import HotkeyService, combo_name
 from .macros import MacroRunner
 from .rune_maker import RuneMaker
+from . import stacker
+from .stacker import Stacker
 from .settings import DEFAULT_PROFILE, PROFILE_FORMAT, ProfileStore, conform, merge_defaults
 from .status import Status
 from .survival import Survival
@@ -46,14 +48,28 @@ MODULES = (
     ("alarm", "Alarme"),
     ("survival", "Sobrevivência"),
     ("rune_maker", "Rune Maker"),
+    ("stacker", "Pilhas"),
 )
 MODULE_TITLES = dict(MODULES)
+# Agem uma vez e terminam: o repetidor pode chamá-los de tempos em tempos.
+ONE_SHOT_MODULES = ("loot", "stacker")
 
 
 def beep() -> None:
     import winsound
     for _ in range(3):
         winsound.Beep(1200, 250)
+
+
+def migrate_repeater(config: dict) -> None:
+    """Perfil antigo, de uma tecla só: ela vira a primeira linha da lista."""
+    if not isinstance(config.get("entries"), list):
+        config["entries"] = []
+    config["entries"] = [entry for entry in config["entries"] if isinstance(entry, dict)]
+    key = str(config.get("key") or "").strip().lower()
+    if key and not config["entries"]:
+        config["entries"].append({"key": key, "interval": config.get("interval", 1.0), "enabled": True})
+    config["key"] = ""
 
 
 class BotController:
@@ -144,6 +160,7 @@ class BotController:
     def _use_profile(self, name: str, profile: dict) -> None:
         self.profile_name = name
         self.profile = profile
+        migrate_repeater(profile["repeater"])
         self.macros = MacroRunner(profile, self.log)
         self.fishing = Pesca(profile["fishing"])
         self.machine = TrainingStateMachine(mode=TrainingMode(profile["training"]["mode"]))
@@ -154,6 +171,8 @@ class BotController:
                                     get_frame=lambda: self._game_frame([self._hand_area()]), alert=self._notify)
         self.looter = loot.Looter(profile, self.log, alert=self._notify,
                                   get_frame=lambda: self._game_frame([loot.capture_area(self.profile["loot"]["grid"])]))
+        self.stacker = Stacker(profile, self.log, alert=self._notify,
+                               get_frame=lambda: self._game_frame([loot.capture_area(self.profile["stacker"]["grid"])]))
         self._set_action_manager(self.am)
         self.store.remember_last(name)
 
@@ -236,7 +255,7 @@ class BotController:
         self._fast_capture = None
         if am is not None:
             am.configure(self.profile["input"])
-        for module in (self.macros, self.fishing, self.survival, self.rune_maker, self.looter):
+        for module in (self.macros, self.fishing, self.survival, self.rune_maker, self.looter, self.stacker):
             module.am = am
 
     def attach(self, hwnd: int, remember: bool = True) -> bool:
@@ -394,8 +413,36 @@ class BotController:
             self.run_next_action()
 
     def _repeat(self, key: str) -> bool:
+        module = self._module_for(key)
+        if module in ONE_SHOT_MODULES:
+            # A tecla do módulo é um atalho do bot, que não chega pelo jogo: chama o módulo direto.
+            running = self.looter.is_running if module == "loot" else self.stacker.is_running
+            if self.am is None or running or not self._hotkey_allowed(module):
+                return False
+            return bool(getattr(self, f"_set_{module}")(True))
         with priority("repeater"):
             return self.run_action(key)
+
+    def repeater_entries(self) -> list:
+        """[(tecla, intervalo)] das linhas ligadas e válidas do repetidor."""
+        entries = []
+        for entry in self.profile["repeater"]["entries"]:
+            key = str(entry.get("key", "")).strip().lower()
+            if not entry.get("enabled", True) or not self._repeatable(key):
+                continue
+            try:
+                entries.append((key, parse_interval(entry.get("interval"))))
+            except ValueError:
+                continue
+        return entries
+
+    def _repeatable(self, key: str) -> bool:
+        if not key:
+            return False
+        module = self._module_for(key)
+        if module is not None:
+            return module in ONE_SHOT_MODULES
+        return key in self.profile["macros"] or key_to_vk(key) is not None
 
     def run_action(self, action: str) -> bool:
         """Executa uma macro salva, uma tecla no jogo ou, senão, fala o texto."""
@@ -420,6 +467,7 @@ class BotController:
         self.repeater.stop()
         self.rune_maker.stop()
         self.looter.stop()
+        self.stacker.stop()
         while not self._actions.empty():
             try:
                 self._actions.get_nowait()
@@ -465,6 +513,16 @@ class BotController:
             return False
         return self.looter.start()
 
+    def _set_stacker(self, on: bool) -> bool:
+        if not on:
+            self.stacker.stop()
+            return True
+        missing = self.stacker.missing()
+        if missing:
+            self.log(f"Pilhas: falta configurar {missing}.")
+            return False
+        return self.stacker.start()
+
     def _set_training(self, on: bool) -> bool:
         if not on:
             self.training_on = False
@@ -501,16 +559,35 @@ class BotController:
         if not on:
             self.repeater.stop()
             return True
-        config = self.profile["repeater"]
-        key = str(config["key"]).strip().lower()
-        if key not in self.profile["macros"] and key_to_vk(key) is None:
-            self.log(f"Tecla inválida no repetidor: {key!r}")
+        for entry in self.profile["repeater"]["entries"]:
+            key = str(entry.get("key", "")).strip().lower()
+            if not entry.get("enabled", True):
+                continue
+            module = self._module_for(key)
+            if module is not None and module not in ONE_SHOT_MODULES:
+                self.log(f"Repetidor: {key.upper()} liga e desliga {MODULE_TITLES[module]}; "
+                         "isso não dá para repetir e ficou de fora.")
+            elif not self._repeatable(key):
+                self.log(f"Repetidor: tecla inválida {key!r} ficou de fora.")
+            else:
+                try:
+                    parse_interval(entry.get("interval"))
+                except ValueError as exc:
+                    self.log(f"Repetidor: {key.upper()}: {exc}")
+        if not self.repeater_entries():
+            self.log("Repetidor: nenhuma tecla válida e ligada.")
             return False
-        try:
-            return self.repeater.start(key, config["interval"], self._repeat)
-        except ValueError as exc:
-            self.log(str(exc))
-            return False
+        return self.repeater.start(self.repeater_entries, self._repeat)
+
+    def add_repeater_entry(self) -> None:
+        self.profile["repeater"]["entries"].append({"key": "", "interval": 1.0, "enabled": True})
+        self.save()
+        self.events.put(("repeater", None))
+
+    def remove_repeater_entry(self, index: int) -> None:
+        self.profile["repeater"]["entries"].pop(index)
+        self.save()
+        self.events.put(("repeater", None))
 
     def _set_alarm(self, on: bool) -> bool:
         if on and not self.profile["training"]["region"]:
@@ -751,6 +828,82 @@ class BotController:
             self.log(f"Rune maker: {label} salvo.")
         return self._begin_capture(f"Clique em: {label}", 1, done)
 
+    # ---------- pilhas ----------
+
+    def _set_stacker_grid(self, rect) -> bool:
+        frame = self._game_frame()
+        grid = loot.find_grid(frame, rect) if frame is not None else None
+        if grid is None:
+            self.log("Não achei os slots aí. Selecione só a área dos itens da BP.")
+            return False
+        self.profile["stacker"]["grid"] = grid
+        self.save()
+        self.log(f"Pilhas: BP de {grid[2]} x {grid[3]} slots.")
+        return True
+
+    def capture_stack_item(self, group=None) -> bool:
+        """Clique num item da BP: vira um item novo, ou mais um desenho do item `group`."""
+        config = self.profile["stacker"]
+        if not config["grid"]:
+            self.log("Pilhas: selecione os slots da BP primeiro.")
+            return False
+
+        def done(points):
+            frame = self._game_frame()
+            x, y = points[0]
+            slot = None if frame is None else next(
+                (s for s in loot.read_slots(frame, config["grid"])
+                 if s.left <= x < s.left + loot.SLOT and s.top <= y < s.top + loot.SLOT), None)
+            if slot is None or loot.is_empty(slot.pixels):
+                self.log("Pilhas: clique em cima de um item, dentro dos slots da BP.")
+                return
+            sprite = loot.encode_sprite(slot.pixels)
+            owner = next((i for i, sprites in enumerate(config["items"]) if loot.is_known(slot.pixels, sprites)), None)
+            if owner is not None:
+                self.log(f"Pilhas: esse desenho já é do item {owner + 1}.")
+                return
+            if group is None or group >= len(config["items"]):
+                config["items"].append([sprite])
+                self.log(f"Pilhas: item {len(config['items'])} salvo.")
+            else:
+                config["items"][group].append(sprite)
+                self.log(f"Pilhas: mais um desenho no item {group + 1}.")
+            self.events.put(("stacker", None))
+        prompt = "Clique no item que vai empilhar" if group is None else f"Clique em outro tamanho do item {group + 1}"
+        return self._begin_capture(prompt, 1, done)
+
+    def merge_stack_items(self, source: int, target: int) -> None:
+        """Os desenhos de `source` passam a ser tamanhos do item `target`."""
+        items = self.profile["stacker"]["items"]
+        if source == target or not (0 <= source < len(items) and 0 <= target < len(items)):
+            return
+        items[target].extend(items[source])
+        items.pop(source)
+        self.save()
+        self.log(f"Pilhas: item {source + 1} juntado ao item {target + 1 if target < source else target}.")
+        self.events.put(("stacker", None))
+
+    def test_stacker(self):
+        """Lê a BP agora. Devolve (recorte, [(x, y, item ou None, cheia)]) para a prévia."""
+        config = self.profile["stacker"]
+        frame = self._game_frame()
+        if frame is None or not config["grid"]:
+            self.log("Pilhas: selecione os slots da BP com o jogo aberto.")
+            return None, None
+        left, top, columns, rows = config["grid"]
+        size = (loot.PITCH * (columns - 1) + loot.SLOT, loot.PITCH * (rows - 1) + loot.SLOT)
+        view = loot.read_slots(frame, config["grid"])
+        slots = [(slot.left - left, slot.top - top, stacker.group_of(slot.pixels, config["items"]),
+                  stacker.is_full(slot.pixels))
+                 for slot in view if not loot.is_empty(slot.pixels)]
+        self.log("Pilhas: " + stacker.describe(view, config["items"]))
+        return battle_vision.crop(frame, (left, top, *size)), slots
+
+    def remove_stack_item(self, group: int) -> None:
+        self.profile["stacker"]["items"].pop(group)
+        self.save()
+        self.events.put(("stacker", None))
+
     def capture_loot_destination(self, index: int = 0) -> bool:
         """Captura a BP desse número; um número além da última cria uma nova."""
         def done(points):
@@ -875,6 +1028,8 @@ class BotController:
         rect = [client_left, client_top, width, height]
         if target == "loot":
             return self._set_loot_grid(rect)
+        if target == "stacker":
+            return self._set_stacker_grid(rect)
         if target == "battle":
             if width < 80 or height < 60:
                 self.log("Região muito pequena para a battle list.")
@@ -1000,6 +1155,10 @@ class BotController:
 
         allowed = len(profile["training"]["allowed_names"])
         missing = self.looter.missing()
+        stack_missing = self.stacker.missing()
+        active = self.repeater_entries()
+        repeater_detail = (" · ".join(f"{key.upper()} {interval:g} s" for key, interval in active[:3])
+                           + (f" +{len(active) - 3}" if len(active) > 3 else "")) or "Nenhuma tecla"
         loot_detail = f"Falta {missing}" if missing else f"{len(profile['loot']['items'])} item(ns) aprendido(s)"
         return {
             "connected": self.am is not None,
@@ -1008,9 +1167,10 @@ class BotController:
             "fishing": (fishing_on, fishing_detail),
             "macros": (self.macros_on, f"{len(profile['macros'])} hotkey(s)"),
             "loot": (self.looter.is_running, loot_detail),
-            "repeater": (self.repeater.is_running,
-                         f"{profile['repeater']['key']} · {profile['repeater']['interval']} s"),
+            "repeater": (self.repeater.is_running, repeater_detail),
             "alarm": (self.alarm_on, f"{allowed} nome(s) permitido(s)" if allowed else "Avisa se a lista crescer"),
             "survival": (self.survival_on, survival_detail),
             "rune_maker": (self.rune_maker.is_running, f"{self.rune_maker.casts} runa(s) feita(s)"),
+            "stacker": (self.stacker.is_running, f"Falta {stack_missing}" if stack_missing
+                        else f"{len(profile['stacker']['items'])} item(ns)"),
         }

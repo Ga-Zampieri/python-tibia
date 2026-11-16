@@ -39,6 +39,7 @@ DEFAULT_PROFILE = {
         "alarm": "",
         "survival": "",
         "rune_maker": "",
+        "stacker": "",
     },
     # allowed_names: atacar; ignored_names: nunca atacar. normal_order: "balance" | "top".
     # heal: runa usada no alvo do modo Normal quando a vida cai abaixo de `below` %.
@@ -50,7 +51,11 @@ DEFAULT_PROFILE = {
     # destination é a BP 1 e extra_destinations, as seguintes; routes: desenho -> BP, se não for a 1.
     "loot": {"grid": None, "destination": None, "extra_destinations": [], "routes": {}, "close": None,
              "items": [], "bags": []},
-    "repeater": {"key": "f5", "interval": 1.0},
+    # Pilhas: grid da BP e, para cada item, os desenhos dele (a pilha muda de desenho com a quantidade).
+    "stacker": {"grid": None, "items": []},
+    # entries: [{"key": "f5", "interval": 1.0, "enabled": True}], cada tecla no seu intervalo.
+    # key e interval são do formato antigo, de uma tecla só, e viram a primeira da lista ao abrir.
+    "repeater": {"entries": [], "key": "", "interval": 1.0},
     "alarm": {"sound": True, "pause_modules": True},
     # Painel sobre o jogo com os módulos ligados e os atalhos; corner: "left" ou "right".
     "overlay": {"enabled": True, "corner": "left"},
